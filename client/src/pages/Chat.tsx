@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import ProjectTabs, { type Project } from "../components/ProjectTabs";
 import ProjectPicker from "../components/ProjectPicker";
 import StreamingResponse, {
+  StreamingStatusBar,
   type ToolActivity,
 } from "../components/StreamingResponse";
 import ChatInput from "../components/ChatInput";
@@ -74,6 +75,7 @@ interface ProjectState {
   taskStartTime: number | null;
   pendingQuestion: PendingQuestionData | null;
   statusMessage: string;
+  lastEventTime: number;
 }
 
 interface OverflowMenuProps {
@@ -238,6 +240,7 @@ function createEmptyProjectState(): ProjectState {
     taskStartTime: null,
     pendingQuestion: null,
     statusMessage: "",
+    lastEventTime: 0,
   };
 }
 
@@ -320,6 +323,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
   const currentTask = activeState.currentTask;
   const taskStartTime = activeState.taskStartTime;
   const statusMessage = activeState.statusMessage;
+  const lastEventTime = activeState.lastEventTime;
 
   const openProjectIds = useMemo(
     () => new Set(openProjects.map((p) => p.id)),
@@ -784,6 +788,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           updateProjectState(projectId, (state) => ({
             ...state,
             statusMessage: msg.text || "",
+            lastEventTime: Date.now(),
           }));
         } else if (msg.type === "thinking" && projectId) {
           const currentThinking = thinkingRefs.current.get(projectId) || "";
@@ -794,6 +799,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           updateProjectState(projectId, (state) => ({
             ...state,
             currentThinking: thinkingRefs.current.get(projectId) || "",
+            lastEventTime: Date.now(),
           }));
         } else if (msg.type === "text" && projectId) {
           const currentResponse = responseRefs.current.get(projectId) || "";
@@ -805,6 +811,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           updateProjectState(projectId, (state) => ({
             ...state,
             currentResponse: responseRefs.current.get(projectId) || "",
+            lastEventTime: Date.now(),
           }));
         } else if (msg.type === "tool_use" && msg.toolUse && projectId) {
           const activity: ToolActivity = {
@@ -824,6 +831,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             updateProjectState(projectId, (state) => ({
               ...state,
               currentActivity: activityRefs.current.get(projectId) || [],
+              lastEventTime: Date.now(),
               pendingQuestion: {
                 toolUseId: msg.toolUse!.id || "",
                 questions: msg.toolUse!.input
@@ -834,6 +842,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             updateProjectState(projectId, (state) => ({
               ...state,
               currentActivity: activityRefs.current.get(projectId) || [],
+              lastEventTime: Date.now(),
             }));
           }
         } else if (msg.type === "tool_result" && msg.toolResult && projectId) {
@@ -849,6 +858,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           updateProjectState(projectId, (state) => ({
             ...state,
             currentActivity: activityRefs.current.get(projectId) || [],
+            lastEventTime: Date.now(),
           }));
         } else if (msg.type === "done" && projectId) {
           const thinking = thinkingRefs.current.get(projectId) || "";
@@ -1309,25 +1319,17 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
 
   return (
     <main className="h-[100dvh] flex flex-col bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
-      {/* Row 1: Project Tabs */}
-      <ProjectTabs
-        projects={openProjects}
-        activeProjectId={activeProjectId}
-        streamingProjectIds={streamingProjectIds}
-        onSelectProject={setActiveProjectId}
-        onCloseProject={handleCloseProject}
-        onAddProject={() => setShowProjectPicker(true)}
-      />
-
-      {/* Row 2: Project name + git status + overflow menu */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border-default)] bg-[var(--color-bg-primary)] sticky top-0 z-10">
+      {/* Header: Project dropdown + git status + overflow menu */}
+      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border-default)] bg-[var(--color-bg-primary)] sticky top-0 z-20">
         <div className="flex items-center gap-3 min-w-0 flex-1">
-          <h1 className="text-lg font-semibold truncate">
-            {activeProjectId
-              ? openProjects.find((p) => p.id === activeProjectId)?.name ||
-                activeProjectId
-              : "Select a project"}
-          </h1>
+          <ProjectTabs
+            projects={openProjects}
+            activeProjectId={activeProjectId}
+            streamingProjectIds={streamingProjectIds}
+            onSelectProject={setActiveProjectId}
+            onCloseProject={handleCloseProject}
+            onAddProject={() => setShowProjectPicker(true)}
+          />
           <GitStatus
             projectId={activeProjectId}
             serverId={serverConfig.id}
@@ -1574,6 +1576,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
                 content={currentResponse}
                 task={currentTask}
                 statusMessage={statusMessage}
+                lastEventTime={lastEventTime}
                 startedAt={
                   taskStartTime
                     ? new Date(taskStartTime).toISOString()
@@ -1595,6 +1598,18 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Status bar — pinned above input during streaming */}
+      {isStreaming && (
+        <StreamingStatusBar
+          statusMessage={statusMessage}
+          lastEventTime={lastEventTime}
+          startedAt={taskStartTime}
+          thinking={currentThinking}
+          content={currentResponse}
+          activityCount={currentActivity.length}
+        />
+      )}
 
       {/* Input area */}
       <div className="border-t border-[var(--color-border-default)] bg-[var(--color-bg-primary)] px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-4">

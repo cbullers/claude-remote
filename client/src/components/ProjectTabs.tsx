@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 
 export interface WorktreeInfo {
   isWorktree: true;
@@ -32,78 +32,110 @@ export default function ProjectTabs({
   onCloseProject,
   onAddProject,
 }: ProjectTabsProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const activeTabRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Scroll active tab into view
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+  const activeIsStreaming = activeProjectId
+    ? streamingProjectIds.has(activeProjectId)
+    : false;
+  const otherStreaming = projects.some(
+    (p) => p.id !== activeProjectId && streamingProjectIds.has(p.id),
+  );
+
+  // Close dropdown on outside click
   useEffect(() => {
-    if (activeTabRef.current && scrollRef.current) {
-      activeTabRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
-    }
-  }, [activeProjectId]);
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const displayName = activeProject
+    ? activeProject.worktree
+      ? activeProject.worktree.branch
+      : activeProject.name
+    : "Select a project";
 
   return (
-    <div className="flex items-center border-b border-[var(--color-border-default)] bg-[var(--color-bg-secondary)]">
-      {/* Add project button */}
+    <div ref={dropdownRef} className="relative">
+      {/* Trigger button */}
       <button
-        onClick={onAddProject}
-        className="flex-shrink-0 p-2 px-3 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors border-r border-[var(--color-border-default)]"
-        title="Open project"
-        aria-label="Open project"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 min-w-0 max-w-[60vw]"
       >
+        {/* Streaming indicator */}
+        {activeIsStreaming && (
+          <span className="w-2 h-2 bg-[var(--color-accent)] rounded-full animate-pulse shrink-0" />
+        )}
+        {/* Other projects streaming indicator */}
+        {!activeIsStreaming && otherStreaming && (
+          <span className="w-2 h-2 bg-[var(--color-text-tertiary)] rounded-full animate-pulse shrink-0" />
+        )}
+
+        <span className="text-lg font-semibold truncate">{displayName}</span>
+
+        {/* Chevron */}
         <svg
-          xmlns="http://www.w3.org/2000/svg"
-          className="h-5 w-5"
+          className={`w-4 h-4 shrink-0 text-[var(--color-text-tertiary)] transition-transform ${open ? "rotate-180" : ""}`}
           viewBox="0 0 20 20"
           fill="currentColor"
         >
           <path
             fillRule="evenodd"
-            d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
             clipRule="evenodd"
           />
         </svg>
+
+        {/* Project count badge */}
+        {projects.length > 1 && (
+          <span className="text-xs text-[var(--color-text-tertiary)] tabular-nums">
+            {projects.length}
+          </span>
+        )}
       </button>
 
-      {/* Scrollable tabs container */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-x-auto scrollbar-hide"
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-      >
-        <div className="flex">
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-72 max-h-[60vh] overflow-y-auto z-50 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-secondary)] shadow-lg">
+          {/* Open projects */}
           {projects.map((project) => {
             const isActive = project.id === activeProjectId;
             const isStreaming = streamingProjectIds.has(project.id);
+            const name = project.worktree
+              ? project.worktree.branch
+              : project.name;
 
             return (
-              <button
+              <div
                 key={project.id}
-                ref={isActive ? activeTabRef : undefined}
-                onClick={() => onSelectProject(project.id)}
-                className={`
-                  group flex items-center gap-2 px-3 py-2 text-sm font-medium whitespace-nowrap
-                  border-r border-[var(--color-border-default)] transition-colors min-w-0
-                  ${
-                    isActive
-                      ? "bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] border-b-2 border-b-[var(--color-accent)]"
-                      : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
-                  }
-                `}
+                className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-colors ${
+                  isActive
+                    ? "bg-[var(--color-accent)]/10 border-l-2 border-l-[var(--color-accent)]"
+                    : "hover:bg-[var(--color-bg-hover)] border-l-2 border-l-transparent"
+                }`}
+                onClick={() => {
+                  onSelectProject(project.id);
+                  setOpen(false);
+                }}
               >
                 {/* Streaming indicator */}
                 {isStreaming && (
-                  <span className="w-2 h-2 bg-[var(--color-accent)] rounded-full animate-pulse flex-shrink-0" />
+                  <span className="w-2 h-2 bg-[var(--color-accent)] rounded-full animate-pulse shrink-0" />
                 )}
 
-                {/* Worktree indicator */}
+                {/* Worktree icon */}
                 {project.worktree && (
                   <svg
-                    className="w-3 h-3 flex-shrink-0 text-[var(--color-text-tertiary)]"
+                    className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-tertiary)]"
                     viewBox="0 0 16 16"
                     fill="currentColor"
                   >
@@ -114,9 +146,11 @@ export default function ProjectTabs({
                   </svg>
                 )}
 
-                {/* Project name */}
-                <span className="truncate max-w-[120px]">
-                  {project.worktree ? project.worktree.branch : project.name}
+                {/* Name */}
+                <span
+                  className={`text-sm truncate flex-1 ${isActive ? "font-medium text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}
+                >
+                  {name}
                 </span>
 
                 {/* Close button */}
@@ -125,15 +159,11 @@ export default function ProjectTabs({
                     e.stopPropagation();
                     onCloseProject(project.id);
                   }}
-                  className={`
-                    flex-shrink-0 p-0.5 rounded hover:bg-[var(--color-border-emphasis)] transition-colors
-                    ${isActive ? "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100"}
-                  `}
+                  className="shrink-0 p-1 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-border-emphasis)] transition-colors"
                   title="Close project"
-                  aria-label={`Close ${project.name}`}
+                  aria-label={`Close ${name}`}
                 >
                   <svg
-                    xmlns="http://www.w3.org/2000/svg"
                     className="h-3.5 w-3.5"
                     viewBox="0 0 20 20"
                     fill="currentColor"
@@ -145,11 +175,35 @@ export default function ProjectTabs({
                     />
                   </svg>
                 </button>
-              </button>
+              </div>
             );
           })}
+
+          {/* Divider + Open project */}
+          <div className="border-t border-[var(--color-border-default)]">
+            <button
+              onClick={() => {
+                onAddProject();
+                setOpen(false);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+            >
+              <svg
+                className="h-4 w-4 shrink-0"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              Open project...
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

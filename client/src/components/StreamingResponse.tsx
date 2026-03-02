@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from "react";
+import { useState, useEffect, useMemo, memo } from "react";
 import ToolStack from "./ToolStack";
 import type { ToolActivity } from "./types";
 export type { ToolActivity };
@@ -10,6 +10,7 @@ interface StreamingResponseProps {
   isStreaming?: boolean;
   task?: string;
   statusMessage?: string;
+  lastEventTime?: number;
   startedAt?: string;
   completedAt?: string;
 }
@@ -354,6 +355,16 @@ function ThinkingBlock({
   );
 }
 
+// Live-ticking timer hook
+function useTick(enabled: boolean, intervalMs = 1000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setTick((t) => t + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [enabled, intervalMs]);
+}
+
 // Main streaming response component (text only - tools shown in ToolStack)
 export default memo(function StreamingResponse({
   thinking,
@@ -362,21 +373,25 @@ export default memo(function StreamingResponse({
   isStreaming = false,
   task,
   statusMessage,
+  lastEventTime,
   startedAt,
   completedAt,
 }: StreamingResponseProps) {
+  // Tick every second while streaming so elapsed time + idle warning stay live
+  useTick(isStreaming);
+
   // Calculate elapsed time
   const elapsedTime = startedAt
     ? formatElapsedTime(startedAt, isStreaming ? undefined : completedAt)
     : "";
 
-  // Determine current phase
+  // Determine current phase — statusMessage takes priority (e.g. compacting)
   const phase = useMemo(() => {
     if (!isStreaming) return "done";
+    if (statusMessage) return "status";
     if (content) return "responding";
     if (activity.length > 0) return "working";
     if (thinking) return "thinking";
-    if (statusMessage) return "status";
     return "starting";
   }, [isStreaming, content, activity.length, thinking, statusMessage]);
 
@@ -389,6 +404,12 @@ export default memo(function StreamingResponse({
     return labels[statusMessage] || `${statusMessage}...`;
   }, [statusMessage]);
 
+  // Calculate idle time
+  const idleSeconds =
+    isStreaming && lastEventTime
+      ? Math.floor((Date.now() - lastEventTime) / 1000)
+      : 0;
+
   const phaseLabels: Record<string, { label: string; color: string }> = {
     starting: {
       label: "Starting...",
@@ -396,7 +417,7 @@ export default memo(function StreamingResponse({
     },
     status: {
       label: statusLabel,
-      color: "text-[var(--color-text-secondary)]",
+      color: "text-yellow-400",
     },
     thinking: {
       label: "Thinking...",
@@ -411,7 +432,7 @@ export default memo(function StreamingResponse({
 
   return (
     <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border-default)] overflow-hidden min-w-0">
-      {/* Header */}
+      {/* Header — minimal for historical, shows task name */}
       <div className="px-4 py-2.5 bg-[var(--color-bg-tertiary)] border-b border-[var(--color-border-default)] flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {isStreaming ? (
@@ -435,7 +456,7 @@ export default memo(function StreamingResponse({
             </span>
           )}
         </div>
-        {elapsedTime && (
+        {elapsedTime && !isStreaming && (
           <span className="text-xs text-[var(--color-text-tertiary)] tabular-nums shrink-0">
             {elapsedTime}
           </span>
@@ -478,6 +499,87 @@ export default memo(function StreamingResponse({
       {activity && activity.length > 0 && (
         <ToolStack activity={activity} isStreaming={isStreaming} />
       )}
+
     </div>
   );
 });
+
+// Pinned status bar — rendered outside the scroll container in Chat.tsx
+export function StreamingStatusBar({
+  statusMessage,
+  lastEventTime,
+  startedAt,
+  thinking,
+  content,
+  activityCount,
+}: {
+  statusMessage: string;
+  lastEventTime: number;
+  startedAt: number | null;
+  thinking: string;
+  content: string;
+  activityCount: number;
+}) {
+  useTick(true);
+
+  const elapsedTime = startedAt
+    ? formatElapsedTime(new Date(startedAt).toISOString())
+    : "";
+
+  const phase = (() => {
+    if (statusMessage) return "status";
+    if (content) return "responding";
+    if (activityCount > 0) return "working";
+    if (thinking) return "thinking";
+    return "starting";
+  })();
+
+  const statusLabel = (() => {
+    if (!statusMessage) return "";
+    const labels: Record<string, string> = {
+      compacting: "Compacting context...",
+    };
+    return labels[statusMessage] || `${statusMessage}...`;
+  })();
+
+  const phaseLabels: Record<string, { label: string; color: string }> = {
+    starting: {
+      label: "Starting...",
+      color: "text-[var(--color-text-secondary)]",
+    },
+    status: { label: statusLabel, color: "text-yellow-400" },
+    thinking: {
+      label: "Thinking...",
+      color: "text-[var(--color-text-secondary)]",
+    },
+    working: { label: "Working...", color: "text-[var(--color-accent)]" },
+    responding: { label: "Responding...", color: "text-green-400" },
+  };
+
+  const currentPhase = phaseLabels[phase];
+
+  const idleSeconds = lastEventTime
+    ? Math.floor((Date.now() - lastEventTime) / 1000)
+    : 0;
+
+  return (
+    <div className="px-3 py-1.5 bg-[var(--color-bg-tertiary)] border-b border-[var(--color-border-default)] flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="w-2 h-2 bg-[var(--color-accent)] rounded-full animate-pulse shrink-0" />
+        <span
+          className={`text-xs font-medium ${currentPhase.color} truncate`}
+        >
+          {currentPhase.label}
+        </span>
+        {idleSeconds >= 30 && (
+          <span className="text-xs text-yellow-400 shrink-0">
+            No activity {idleSeconds}s
+          </span>
+        )}
+      </div>
+      <span className="text-xs text-[var(--color-text-tertiary)] tabular-nums shrink-0">
+        {elapsedTime}
+      </span>
+    </div>
+  );
+}

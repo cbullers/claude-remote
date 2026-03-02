@@ -100,6 +100,15 @@ function formatTimestamp(timestamp: number): string {
   return date.toLocaleTimeString("en-US", { hour12: false });
 }
 
+// Format running duration for active tools
+function formatRunningTime(timestamp: number): string {
+  const elapsed = Math.floor((Date.now() - timestamp) / 1000);
+  if (elapsed < 60) return `${elapsed}s`;
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
 // Parse activity into paired tool uses and results
 function parseActivityPairs(activity: ToolActivity[]) {
   const pairs: Array<{
@@ -373,19 +382,26 @@ function StackToolCard({
         )}
         {!summary && <div className="flex-1" />}
 
-        {/* Status indicator */}
+        {/* Status indicator + timing */}
         {result?.error ? (
           <span className="text-xs text-red-400">err</span>
         ) : result ? (
           <span className="text-xs text-green-400">ok</span>
         ) : isLatest ? (
-          <span className="w-1.5 h-1.5 bg-[var(--color-accent)] rounded-full animate-pulse" />
+          <>
+            <span className="w-1.5 h-1.5 bg-[var(--color-accent)] rounded-full animate-pulse" />
+            <span className={`text-xs tabular-nums ${Math.floor((Date.now() - timestamp) / 1000) >= 60 ? "text-yellow-400" : "text-[var(--color-accent)]"}`}>
+              {formatRunningTime(timestamp)}
+            </span>
+          </>
         ) : null}
 
-        {/* Timestamp */}
-        <span className="text-xs text-[var(--color-text-tertiary)] tabular-nums">
-          {formatTimestamp(timestamp)}
-        </span>
+        {/* Timestamp (for completed tools) */}
+        {(result || !isLatest) && (
+          <span className="text-xs text-[var(--color-text-tertiary)] tabular-nums">
+            {formatTimestamp(timestamp)}
+          </span>
+        )}
 
         {/* Detail arrow */}
         <span className="text-xs text-[var(--color-text-tertiary)]">▶</span>
@@ -402,11 +418,19 @@ interface ToolStackProps {
 export default function ToolStack({ activity, isStreaming }: ToolStackProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const toolPairs = parseActivityPairs(activity).filter(
-    (pair) => pair.use?.tool !== "AskUserQuestion",
+    (pair) => pair.tool !== "AskUserQuestion",
   );
   const [modalIndex, setModalIndex] = useState<number | null>(null);
+  const [, setTick] = useState(0);
 
   const closeModal = useCallback(() => setModalIndex(null), []);
+
+  // Tick every second while streaming so active tool elapsed time updates
+  useEffect(() => {
+    if (!isStreaming) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isStreaming]);
 
   // Auto-scroll to bottom when new tools arrive
   useEffect(() => {
@@ -429,8 +453,8 @@ export default function ToolStack({ activity, isStreaming }: ToolStackProps) {
         <span className="text-xs text-[var(--color-text-tertiary)] font-medium">
           Tools
         </span>
-        <span className="text-xs text-[var(--color-text-muted)]">
-          ({toolPairs.length})
+        <span className="text-xs text-[var(--color-text-muted)] tabular-nums">
+          ({toolPairs.filter((p) => p.result).length}/{toolPairs.length})
         </span>
         {isStreaming && (
           <span className="w-1.5 h-1.5 bg-[var(--color-accent)] rounded-full animate-pulse" />
