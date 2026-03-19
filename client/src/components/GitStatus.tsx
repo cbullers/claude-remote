@@ -300,7 +300,7 @@ export default function GitStatus({
             onClick={() => setExpanded(false)}
           />
 
-          <div className="absolute top-full right-0 mt-1 z-50 w-64 bg-[var(--color-bg-secondary)] border border-[var(--color-border-default)] rounded-lg shadow-xl overflow-hidden">
+          <div className="absolute top-full left-0 mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] bg-[var(--color-bg-secondary)] border border-[var(--color-border-default)] rounded-lg shadow-xl overflow-hidden">
             <div className="p-3 space-y-2">
               {/* Branch */}
               <div className="flex items-center gap-2">

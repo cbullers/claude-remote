@@ -264,6 +264,77 @@ function TextBlock({
       continue;
     }
 
+    // Table: lines starting with |
+    if (line.trimStart().startsWith("|") && line.trimEnd().endsWith("|")) {
+      const tableLines: string[] = [];
+      while (
+        i < lines.length &&
+        lines[i].trimStart().startsWith("|") &&
+        lines[i].trimEnd().endsWith("|")
+      ) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length >= 2) {
+        // Parse cells from each row
+        const parseRow = (row: string) =>
+          row
+            .replace(/^\|/, "")
+            .replace(/\|$/, "")
+            .split("|")
+            .map((c) => c.trim());
+
+        // Check if second row is a separator (---|---|---)
+        const isSeparator = (row: string) =>
+          parseRow(row).every((c) => /^[-:]+$/.test(c));
+
+        const hasSeparator = isSeparator(tableLines[1]);
+        const headerCells = parseRow(tableLines[0]);
+        const bodyRows = tableLines
+          .slice(hasSeparator ? 2 : 1)
+          .filter((r) => !isSeparator(r))
+          .map(parseRow);
+
+        elements.push(
+          <div key={key++} className="my-2 overflow-x-auto">
+            <table className="text-sm text-[var(--color-text-primary)] border-collapse w-full">
+              {hasSeparator && (
+                <thead>
+                  <tr className="border-b border-[var(--color-border-default)]">
+                    {headerCells.map((cell, j) => (
+                      <th
+                        key={j}
+                        className="px-3 py-1.5 text-left font-semibold text-[var(--color-text-secondary)] whitespace-nowrap"
+                      >
+                        {renderInline(cell)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+              )}
+              <tbody>
+                {(hasSeparator ? bodyRows : [headerCells, ...bodyRows]).map(
+                  (row, ri) => (
+                    <tr
+                      key={ri}
+                      className="border-b border-[var(--color-border-default)] last:border-0"
+                    >
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="px-3 py-1.5">
+                          {renderInline(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>,
+        );
+        continue;
+      }
+    }
+
     // Empty line = paragraph break
     if (line.trim() === "") {
       i++;
@@ -278,7 +349,8 @@ function TextBlock({
       !lines[i].startsWith("```") &&
       !lines[i].match(/^#{1,4}\s/) &&
       !/^[-*•]\s/.test(lines[i]) &&
-      !/^\d+\.\s/.test(lines[i])
+      !/^\d+\.\s/.test(lines[i]) &&
+      !(lines[i].trimStart().startsWith("|") && lines[i].trimEnd().endsWith("|"))
     ) {
       paraLines.push(lines[i]);
       i++;
