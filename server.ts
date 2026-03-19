@@ -186,19 +186,34 @@ async function generateConversationName(userText: string): Promise<string> {
   if (cleaned.length <= 30) return cleaned;
 
   try {
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
+    const { spawn } = await import("child_process");
+    const { tmpdir } = await import("os");
     const prompt = `Summarize this chat message into a short title (max 50 chars, no quotes, no punctuation at end). Just output the title, nothing else.\n\nMessage: ${cleaned.slice(0, 500)}`;
-    const { stdout } = await execFileAsync(
-      "claude",
-      ["--print", "--model", "haiku", "-p", prompt],
-      { encoding: "utf-8", timeout: 15000 },
-    );
-    const result = stdout.trim();
+    const result = await new Promise<string>((resolve, reject) => {
+      const proc = spawn("/usr/local/bin/claude", ["--print", "--model", "haiku", "-p", prompt], {
+        cwd: tmpdir(),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.on("close", (code) => {
+        if (code === 0 && stdout.trim()) {
+          resolve(stdout.trim());
+        } else {
+          reject(new Error(`claude exited ${code}, stderr: ${stderr}, stdout: ${stdout}`));
+        }
+      });
+      proc.on("error", reject);
+      proc.stdin.end();
+      setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 30000);
+    });
 
-    if (result && result.length > 0 && result.length <= 60) {
-      return result;
+    // Strip markdown bold/italic and take only the first line
+    const title = result.replace(/\*+/g, "").split("\n")[0].trim();
+    if (title && title.length > 0 && title.length <= 60) {
+      return title;
     }
   } catch (err) {
     console.error("[auto-name] AI summarization failed, using fallback:", err);
@@ -1751,6 +1766,36 @@ async function main() {
           text: userText,
         });
 
+        // Auto-name conversations with placeholder names (fire-and-forget)
+        if (projectId) {
+          const convId = conversationId || "default";
+          const convName = getConversationName(projectId, convId);
+          console.log(`[auto-name] Checking ${projectId}/${convId}: name="${convName}"`);
+          if (!convName || convName === "New Chat" || convName === "Default") {
+            generateConversationName(userText).then((summary) => {
+              console.log(`[auto-name] Generated name for ${convId}: "${summary}"`);
+              renameProjectConversation(projectId, convId, summary);
+              // Notify all clients
+              const renameEvent = JSON.stringify({
+                type: "conversation_renamed",
+                projectId,
+                conversationId: convId,
+                name: summary,
+              });
+              for (const [connDeviceId, connWs] of connectedClients.entries()) {
+                if (connWs.readyState === WebSocket.OPEN) {
+                  const connDevice = devices.find((d) => d.id === connDeviceId);
+                  if (connDevice) {
+                    connWs.send(JSON.stringify(encrypt(renameEvent, connDevice.sharedSecret)));
+                  }
+                }
+              }
+            }).catch((err) => {
+              console.error("[auto-name] Failed to auto-name conversation:", err);
+            });
+          }
+        }
+
         const jKey = jobKey(currentDevice.id, projectId, conversationId);
         const abortController = new AbortController();
         activeJobs.set(jKey, abortController);
@@ -1990,34 +2035,6 @@ async function main() {
                   addMessage(assistantMsg);
                 }
               }
-              // Auto-name "New Chat" conversations based on first user message
-              if (projectId && conversationId && conversationId !== "default") {
-                try {
-                  const convName = getConversationName(projectId, conversationId);
-                  if (convName === "New Chat") {
-                    const summary = await generateConversationName(userText);
-                    renameProjectConversation(projectId, conversationId, summary);
-                    // Notify all clients to refresh conversation list
-                    const renameEvent = JSON.stringify({
-                      type: "conversation_renamed",
-                      projectId,
-                      conversationId,
-                      name: summary,
-                    });
-                    for (const [connDeviceId, connWs] of connectedClients.entries()) {
-                      if (connWs.readyState === WebSocket.OPEN) {
-                        const connDevice = devices.find((d) => d.id === connDeviceId);
-                        if (connDevice) {
-                          connWs.send(JSON.stringify(encrypt(renameEvent, connDevice.sharedSecret)));
-                        }
-                      }
-                    }
-                  }
-                } catch (err) {
-                  console.error("[auto-name] Failed to auto-name conversation:", err);
-                }
-              }
-
               // Push notification for task completion
               const snippet = assistantText.slice(0, 100) || "Task finished";
               sendPushToAll("Task complete", snippet, "/").catch((err) =>

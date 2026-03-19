@@ -1397,12 +1397,27 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           setConversationLists((prev) => {
             const next = new Map(prev);
             const list = next.get(msg.projectId!) || [];
-            next.set(
-              msg.projectId!,
-              list.map((c) =>
-                c.id === msg.conversationId ? { ...c, name: msg.name! } : c,
-              ),
-            );
+            const exists = list.some((c) => c.id === msg.conversationId);
+            if (exists) {
+              next.set(
+                msg.projectId!,
+                list.map((c) =>
+                  c.id === msg.conversationId ? { ...c, name: msg.name! } : c,
+                ),
+              );
+            } else {
+              // Conversation not in list yet (e.g. default) — add it
+              next.set(msg.projectId!, [
+                ...list,
+                {
+                  id: msg.conversationId!,
+                  name: msg.name!,
+                  messageCount: 1,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                },
+              ]);
+            }
             return next;
           });
         } else {
