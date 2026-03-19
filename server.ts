@@ -51,6 +51,12 @@ import {
   clearProjectConversation,
   getProjectSessionId,
   saveProjectSessionId,
+  // Multi-conversation support
+  listProjectConversations,
+  createProjectConversation,
+  deleteProjectConversation,
+  renameProjectConversation,
+  getConversationName,
   // Worktree support
   listBranches,
   createWorktree,
@@ -160,8 +166,49 @@ function broadcastToOthers(excludeDeviceId: string, event: object) {
 }
 
 // Helper to create job key
-function jobKey(deviceId: string, projectId?: string): string {
+function jobKey(
+  deviceId: string,
+  projectId?: string,
+  conversationId?: string,
+): string {
+  if (projectId && conversationId) {
+    return `${deviceId}:${projectId}:${conversationId}`;
+  }
   return projectId ? `${deviceId}:${projectId}` : deviceId;
+}
+
+// Generate a conversation name from the user's first message using AI summarization
+async function generateConversationName(userText: string): Promise<string> {
+  const cleaned = userText.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "New Chat";
+
+  // For very short messages, just use them directly
+  if (cleaned.length <= 30) return cleaned;
+
+  try {
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+    const prompt = `Summarize this chat message into a short title (max 50 chars, no quotes, no punctuation at end). Just output the title, nothing else.\n\nMessage: ${cleaned.slice(0, 500)}`;
+    const { stdout } = await execFileAsync(
+      "claude",
+      ["--print", "--model", "haiku", "-p", prompt],
+      { encoding: "utf-8", timeout: 15000 },
+    );
+    const result = stdout.trim();
+
+    if (result && result.length > 0 && result.length <= 60) {
+      return result;
+    }
+  } catch (err) {
+    console.error("[auto-name] AI summarization failed, using fallback:", err);
+  }
+
+  // Fallback: truncate at word boundary
+  if (cleaned.length <= 50) return cleaned;
+  const truncated = cleaned.slice(0, 50);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
 }
 
 // Events file path
@@ -294,19 +341,49 @@ function clearPartialResponse(deviceId: string) {
 
 function recoverPartialResponses() {
   // On startup, check for partial responses and save them as messages
+  // Key format: "deviceId:projectId:conversationId" or "deviceId:projectId" or "deviceId"
   const partials = loadPartialResponses();
-  for (const [deviceId, partial] of Object.entries(partials)) {
-    if (partial.text || partial.thinking || partial.activity.length > 0) {
+  for (const [key, partial] of Object.entries(partials)) {
+    if (!partial.text && !partial.thinking && partial.activity.length === 0) continue;
+
+    const parts = key.split(":");
+    const now = new Date(partial.updatedAt).toISOString();
+    const msg: Message = {
+      role: "assistant",
+      content: partial.text || "",
+      thinking: partial.thinking || undefined,
+      activity: partial.activity.length > 0 ? partial.activity : undefined,
+      completedAt: now,
+      timestamp: now,
+    };
+
+    if (parts.length >= 3) {
+      // deviceId:projectId:conversationId (conversationId may contain colons)
+      const projectId = parts[1];
+      const conversationId = parts.slice(2).join(":");
       console.log(
-        `[recovery] Found partial response for device ${deviceId}, saving...`,
+        `[recovery] Saving partial response for project ${projectId}/${conversationId}`,
       );
-      addMessage({
-        role: "assistant",
-        content: partial.text + "\n\n[Response interrupted - server restarted]",
-        thinking: partial.thinking || undefined,
-        activity: partial.activity.length > 0 ? partial.activity : undefined,
-        timestamp: new Date(partial.updatedAt).toISOString(),
-      });
+      try {
+        addProjectMessage(projectId, msg, conversationId);
+      } catch (err) {
+        console.error(`[recovery] Failed to save partial for ${projectId}/${conversationId}:`, err);
+      }
+    } else if (parts.length === 2) {
+      // deviceId:projectId (default conversation)
+      const projectId = parts[1];
+      console.log(
+        `[recovery] Saving partial response for project ${projectId}/default`,
+      );
+      try {
+        addProjectMessage(projectId, msg);
+      } catch (err) {
+        console.error(`[recovery] Failed to save partial for ${projectId}:`, err);
+      }
+    } else {
+      // Global conversation
+      console.log(`[recovery] Saving partial response to global conversation`);
+      addMessage(msg);
     }
   }
   // Clear all partials after recovery
@@ -429,6 +506,11 @@ function checkApiAuth(req: IncomingMessage, res: ServerResponse): boolean {
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   const { pathname } = parse(req.url || "", true);
   const method = req.method || "GET";
+
+  // Log API requests for debugging
+  if (pathname?.startsWith("/api/")) {
+    console.log(`[http] ${method} ${pathname}`);
+  }
 
   // CORS: restrict to known origins + configurable extras for multi-server
   const extraOrigins = (process.env.CORS_ORIGINS || "")
@@ -583,47 +665,151 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return json(res, { projects });
   }
 
-  // API: Get project conversation history
+  // API: List conversations for a project
   if (
     pathname?.startsWith("/api/projects/") &&
-    pathname.endsWith("/conversation") &&
+    pathname.endsWith("/conversations") &&
     method === "GET"
   ) {
     const projectId = decodeURIComponent(
-      pathname.split("/api/projects/")[1].replace("/conversation", ""),
+      pathname.split("/api/projects/")[1].replace("/conversations", ""),
     );
+    if (!validateProjectId(projectId))
+      return json(res, { error: "Invalid project ID" }, 400);
+    const conversations = listProjectConversations(projectId);
+    console.log(
+      `[api] Returning ${conversations.length} conversations for project ${projectId}`,
+    );
+    return json(res, { conversations });
+  }
+
+  // API: Create a new conversation for a project
+  if (
+    pathname?.startsWith("/api/projects/") &&
+    pathname.endsWith("/conversations") &&
+    method === "POST"
+  ) {
+    const projectId = decodeURIComponent(
+      pathname.split("/api/projects/")[1].replace("/conversations", ""),
+    );
+    if (!validateProjectId(projectId))
+      return json(res, { error: "Invalid project ID" }, 400);
+    const project = getProject(projectId);
+    if (!project) return json(res, { error: "Project not found" }, 404);
+
+    let name: string | undefined;
+    try {
+      const body = await readBody(req);
+      if (body) {
+        const parsed = JSON.parse(body);
+        name = parsed.name;
+      }
+    } catch {
+      // No body, use default name
+    }
+
+    const conversation = createProjectConversation(projectId, name);
+    console.log(
+      `[api] Created conversation ${conversation.id} for project ${projectId}`,
+    );
+    return json(res, { conversation }, 201);
+  }
+
+  // API: Delete or rename a specific conversation
+  // Pattern: /api/projects/:id/conversations/:convId
+  if (
+    pathname?.match(
+      /^\/api\/projects\/[^/]+\/conversations\/[^/]+$/,
+    ) &&
+    (method === "DELETE" || method === "PATCH")
+  ) {
+    const parts = pathname.split("/api/projects/")[1].split("/conversations/");
+    const projectId = decodeURIComponent(parts[0]);
+    const conversationId = decodeURIComponent(parts[1]);
+    if (!validateProjectId(projectId))
+      return json(res, { error: "Invalid project ID" }, 400);
+
+    if (method === "DELETE") {
+      deleteProjectConversation(projectId, conversationId);
+      console.log(
+        `[api] Deleted conversation ${conversationId} for project ${projectId}`,
+      );
+      return json(res, { success: true });
+    }
+
+    if (method === "PATCH") {
+      try {
+        const body = await readBody(req);
+        const { name } = JSON.parse(body);
+        if (!name) return json(res, { error: "Missing name" }, 400);
+        renameProjectConversation(projectId, conversationId, name);
+        return json(res, { success: true });
+      } catch (err) {
+        return json(res, { error: String(err) }, 400);
+      }
+    }
+  }
+
+  // API: Get project conversation history (with optional conversationId)
+  // Pattern: /api/projects/:id/conversation or /api/projects/:id/conversation/:convId
+  if (
+    pathname?.startsWith("/api/projects/") &&
+    pathname.match(/\/conversation(\/|$)/) &&
+    !pathname.match(/\/conversations(\/|$)/) &&
+    method === "GET"
+  ) {
+    const afterProjects = pathname.split("/api/projects/")[1];
+    const convIdx = afterProjects.indexOf("/conversation");
+    const projectId = decodeURIComponent(afterProjects.substring(0, convIdx));
+    const conversationId =
+      decodeURIComponent(
+        afterProjects
+          .substring(convIdx + "/conversation".length)
+          .replace(/^\//, ""),
+      ) || undefined;
+
     if (!validateProjectId(projectId))
       return json(res, { error: "Invalid project ID" }, 400);
     const project = getProject(projectId);
     if (!project) {
       return json(res, { error: "Project not found" }, 404);
     }
-    const conversation = loadProjectConversation(projectId);
+    const conversation = loadProjectConversation(projectId, conversationId);
     console.log(
-      `[api] Returning project ${projectId} conversation with`,
+      `[api] Returning project ${projectId}/${conversationId || "default"} conversation with`,
       conversation.messages.length,
       "messages",
     );
     return json(res, conversation);
   }
 
-  // API: Clear project conversation
+  // API: Clear project conversation (with optional conversationId)
   if (
     pathname?.startsWith("/api/projects/") &&
-    pathname.endsWith("/conversation") &&
+    pathname.match(/\/conversation(\/|$)/) &&
+    !pathname.match(/\/conversations(\/|$)/) &&
     method === "DELETE"
   ) {
-    const projectId = decodeURIComponent(
-      pathname.split("/api/projects/")[1].replace("/conversation", ""),
-    );
+    const afterProjects = pathname.split("/api/projects/")[1];
+    const convIdx = afterProjects.indexOf("/conversation");
+    const projectId = decodeURIComponent(afterProjects.substring(0, convIdx));
+    const conversationId =
+      decodeURIComponent(
+        afterProjects
+          .substring(convIdx + "/conversation".length)
+          .replace(/^\//, ""),
+      ) || undefined;
+
     if (!validateProjectId(projectId))
       return json(res, { error: "Invalid project ID" }, 400);
     const project = getProject(projectId);
     if (!project) {
       return json(res, { error: "Project not found" }, 404);
     }
-    clearProjectConversation(projectId);
-    console.log(`[api] Project ${projectId} conversation cleared`);
+    clearProjectConversation(projectId, conversationId);
+    console.log(
+      `[api] Project ${projectId}/${conversationId || "default"} conversation cleared`,
+    );
     return json(res, { success: true });
   }
 
@@ -1377,6 +1563,7 @@ async function main() {
         pin?: string;
         text?: string;
         projectId?: string;
+        conversationId?: string;
         answers?: Array<{ header: string; answer: string }>;
       };
       try {
@@ -1418,20 +1605,34 @@ async function main() {
           // Register this connection
           connectedClients.set(currentDevice.id, ws);
 
-          // Find all active jobs for this device (across all projects)
+          // Find all active jobs for this device (across all projects/conversations)
           const activeProjectIds: string[] = [];
+          const activeConversationMap: Record<string, string> = {};
           for (const key of activeJobs.keys()) {
             if (key.startsWith(`${currentDevice.id}:`)) {
-              // Extract projectId from key format "deviceId:projectId"
-              const projectId = key.substring(currentDevice.id.length + 1);
-              activeProjectIds.push(projectId);
+              // Key format: "deviceId:projectId" or "deviceId:projectId:conversationId"
+              const rest = key.substring(currentDevice.id.length + 1);
+              const colonIdx = rest.indexOf(":");
+              if (colonIdx >= 0) {
+                const projectId = rest.substring(0, colonIdx);
+                const conversationId = rest.substring(colonIdx + 1);
+                if (!activeProjectIds.includes(projectId)) {
+                  activeProjectIds.push(projectId);
+                }
+                activeConversationMap[projectId] = conversationId;
+              } else {
+                activeProjectIds.push(rest);
+              }
             } else if (key === currentDevice.id) {
-              // Legacy global job (no projectId)
               activeProjectIds.push("__global__");
             }
           }
 
-          sendEncrypted({ type: "auth_ok", activeProjectIds });
+          sendEncrypted({
+            type: "auth_ok",
+            activeProjectIds,
+            activeConversationMap,
+          });
 
           // Send partial responses for any active streaming sessions
           // This sends the accumulated content BEFORE pending events (which are deltas)
@@ -1439,18 +1640,20 @@ async function main() {
             const partials = loadPartialResponses();
             for (const projectId of activeProjectIds) {
               if (projectId === "__global__") continue;
-              const jKey = jobKey(currentDevice.id, projectId);
+              const convId = activeConversationMap[projectId];
+              const jKey = jobKey(currentDevice.id, projectId, convId);
               const partial = partials[jKey];
               if (partial) {
                 sendEncrypted({
                   type: "streaming_restore",
                   projectId,
+                  conversationId: convId,
                   thinking: partial.thinking,
                   text: partial.text,
                   activity: partial.activity,
                 });
                 console.log(
-                  `[${currentDevice.id}] Sent streaming restore for ${projectId}`,
+                  `[${currentDevice.id}] Sent streaming restore for ${projectId}/${convId || "default"}`,
                 );
               }
             }
@@ -1490,10 +1693,12 @@ async function main() {
 
         const userText = msg.text || "";
         const projectId = msg.projectId;
+        const conversationId = msg.conversationId;
         console.log(
           "Processing message:",
           userText.substring(0, 50),
           projectId ? `[project: ${projectId}]` : "[global]",
+          conversationId ? `[conv: ${conversationId}]` : "",
         );
 
         // Validate projectId format and existence
@@ -1521,11 +1726,15 @@ async function main() {
 
         // Save user message (to project or global)
         if (projectId) {
-          addProjectMessage(projectId, {
-            role: "user",
-            content: userText,
-            timestamp: new Date().toISOString(),
-          });
+          addProjectMessage(
+            projectId,
+            {
+              role: "user",
+              content: userText,
+              timestamp: new Date().toISOString(),
+            },
+            conversationId,
+          );
         } else {
           addMessage({
             role: "user",
@@ -1538,10 +1747,11 @@ async function main() {
         broadcastToOthers(currentDevice.id, {
           type: "sync_user_message",
           projectId,
+          conversationId,
           text: userText,
         });
 
-        const jKey = jobKey(currentDevice.id, projectId);
+        const jKey = jobKey(currentDevice.id, projectId, conversationId);
         const abortController = new AbortController();
         activeJobs.set(jKey, abortController);
 
@@ -1585,7 +1795,7 @@ async function main() {
 
         // Get existing session ID for continuity
         const sessionId = projectId
-          ? getProjectSessionId(projectId)
+          ? getProjectSessionId(projectId, conversationId)
           : getClaudeSessionId();
         console.log(
           "Using Claude session:",
@@ -1606,7 +1816,7 @@ async function main() {
 
         spawnClaude(
           messageToSend,
-          (event: ClaudeEvent) => {
+          async (event: ClaudeEvent) => {
             console.log(
               "[ws] Claude event:",
               event.type,
@@ -1622,7 +1832,7 @@ async function main() {
                 projectId ? `[project: ${projectId}]` : "",
               );
               if (projectId) {
-                saveProjectSessionId(projectId, event.sessionId);
+                saveProjectSessionId(projectId, event.sessionId, conversationId);
               } else {
                 saveClaudeSessionId(event.sessionId);
               }
@@ -1635,10 +1845,12 @@ async function main() {
               transformedEvent = { ...event, error: event.text };
             }
 
-            // Include projectId in all events sent to client
-            const eventWithProject = projectId
-              ? { ...transformedEvent, projectId }
-              : transformedEvent;
+            // Include projectId and conversationId in all events sent to client
+            const eventWithProject = {
+              ...transformedEvent,
+              ...(projectId ? { projectId } : {}),
+              ...(conversationId ? { conversationId } : {}),
+            };
 
             // Broadcast to ALL connected clients (not just the originating device)
             const eventJson = JSON.stringify(eventWithProject);
@@ -1708,7 +1920,7 @@ async function main() {
                 event.toolUse.id
               ) {
                 const currentSessionId = projectId
-                  ? getProjectSessionId(projectId)
+                  ? getProjectSessionId(projectId, conversationId)
                   : getClaudeSessionId();
                 pendingQuestions.set(jKey, {
                   toolUseId: event.toolUse.id,
@@ -1773,11 +1985,39 @@ async function main() {
                   timestamp: new Date().toISOString(),
                 };
                 if (projectId) {
-                  addProjectMessage(projectId, assistantMsg);
+                  addProjectMessage(projectId, assistantMsg, conversationId);
                 } else {
                   addMessage(assistantMsg);
                 }
               }
+              // Auto-name "New Chat" conversations based on first user message
+              if (projectId && conversationId && conversationId !== "default") {
+                try {
+                  const convName = getConversationName(projectId, conversationId);
+                  if (convName === "New Chat") {
+                    const summary = await generateConversationName(userText);
+                    renameProjectConversation(projectId, conversationId, summary);
+                    // Notify all clients to refresh conversation list
+                    const renameEvent = JSON.stringify({
+                      type: "conversation_renamed",
+                      projectId,
+                      conversationId,
+                      name: summary,
+                    });
+                    for (const [connDeviceId, connWs] of connectedClients.entries()) {
+                      if (connWs.readyState === WebSocket.OPEN) {
+                        const connDevice = devices.find((d) => d.id === connDeviceId);
+                        if (connDevice) {
+                          connWs.send(JSON.stringify(encrypt(renameEvent, connDevice.sharedSecret)));
+                        }
+                      }
+                    }
+                  }
+                } catch (err) {
+                  console.error("[auto-name] Failed to auto-name conversation:", err);
+                }
+              }
+
               // Push notification for task completion
               const snippet = assistantText.slice(0, 100) || "Task finished";
               sendPushToAll("Task complete", snippet, "/").catch((err) =>
@@ -1804,6 +2044,7 @@ async function main() {
         }
 
         const projectId = msg.projectId;
+        const conversationId = msg.conversationId;
         if (projectId && !validateProjectId(projectId)) {
           sendEncrypted({
             type: "error",
@@ -1813,7 +2054,7 @@ async function main() {
           return;
         }
 
-        const jKey = jobKey(currentDevice.id, projectId);
+        const jKey = jobKey(currentDevice.id, projectId, conversationId);
         const pending = pendingQuestions.get(jKey);
 
         if (!pending) {
@@ -1839,11 +2080,15 @@ async function main() {
 
         // Save answer as user message
         if (projectId) {
-          addProjectMessage(projectId, {
-            role: "user",
-            content: formattedAnswer,
-            timestamp: new Date().toISOString(),
-          });
+          addProjectMessage(
+            projectId,
+            {
+              role: "user",
+              content: formattedAnswer,
+              timestamp: new Date().toISOString(),
+            },
+            conversationId,
+          );
         } else {
           addMessage({
             role: "user",
@@ -1913,7 +2158,7 @@ async function main() {
 
             if (event.type === "session_init" && event.sessionId) {
               if (projectId) {
-                saveProjectSessionId(projectId, event.sessionId);
+                saveProjectSessionId(projectId, event.sessionId, conversationId);
               } else {
                 saveClaudeSessionId(event.sessionId);
               }
@@ -1925,9 +2170,11 @@ async function main() {
               transformedEvent = { ...event, error: event.text };
             }
 
-            const eventWithProject = projectId
-              ? { ...transformedEvent, projectId }
-              : transformedEvent;
+            const eventWithProject = {
+              ...transformedEvent,
+              ...(projectId ? { projectId } : {}),
+              ...(conversationId ? { conversationId } : {}),
+            };
 
             const eventJson = JSON.stringify(eventWithProject);
             let sentToAny = false;
@@ -1991,7 +2238,7 @@ async function main() {
                 event.toolUse.id
               ) {
                 const currentSessionId = projectId
-                  ? getProjectSessionId(projectId)
+                  ? getProjectSessionId(projectId, conversationId)
                   : getClaudeSessionId();
                 pendingQuestions.set(jKey, {
                   toolUseId: event.toolUse.id,
@@ -2052,7 +2299,7 @@ async function main() {
                   timestamp: new Date().toISOString(),
                 };
                 if (projectId) {
-                  addProjectMessage(projectId, assistantMsg);
+                  addProjectMessage(projectId, assistantMsg, conversationId);
                 } else {
                   addMessage(assistantMsg);
                 }
@@ -2079,8 +2326,9 @@ async function main() {
         console.log(
           "Cancel requested",
           msg.projectId ? `[project: ${msg.projectId}]` : "[global]",
+          msg.conversationId ? `[conv: ${msg.conversationId}]` : "",
         );
-        const jKey = jobKey(currentDevice.id, msg.projectId);
+        const jKey = jobKey(currentDevice.id, msg.projectId, msg.conversationId);
         const abortController = activeJobs.get(jKey);
         if (abortController) {
           abortController.abort();
@@ -2090,6 +2338,7 @@ async function main() {
         broadcastToOthers(currentDevice.id, {
           type: "sync_cancel",
           projectId: msg.projectId,
+          conversationId: msg.conversationId,
         });
       } else {
         console.log("Unknown message type:", msg.type);

@@ -53,6 +53,14 @@ interface Message {
   completedAt?: string;
 }
 
+interface ConversationInfo {
+  id: string;
+  name: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 type View = "pin" | "chat";
 
 interface PendingQuestionData {
@@ -78,11 +86,218 @@ interface ProjectState {
   lastEventTime: number;
 }
 
+interface ConversationSwitcherProps {
+  conversations: ConversationInfo[];
+  activeConversationId: string;
+  streamingConversationIds: Set<string>;
+  onSwitch: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  isOpen: boolean;
+  onToggle: () => void;
+}
+
+function ConversationSwitcher({
+  conversations,
+  activeConversationId,
+  streamingConversationIds,
+  onSwitch,
+  onNew,
+  onDelete,
+  onRename,
+  isOpen,
+  onToggle,
+}: ConversationSwitcherProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const activeConv = conversations.find((c) => c.id === activeConversationId);
+  const displayName = activeConv?.name || "Default";
+  const activeIsStreaming = streamingConversationIds.has(activeConversationId);
+  const anyStreaming = streamingConversationIds.size > 0;
+
+  const startRename = (conv: ConversationInfo, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(conv.id);
+    setEditName(conv.name);
+    setTimeout(() => editInputRef.current?.focus(), 0);
+  };
+
+  const commitRename = () => {
+    if (editingId && editName.trim() && editName.trim() !== conversations.find(c => c.id === editingId)?.name) {
+      onRename(editingId, editName.trim());
+    }
+    setEditingId(null);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={onToggle}
+        className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
+          activeIsStreaming
+            ? "text-[var(--color-text-primary)] bg-[var(--color-accent)]/15 ring-1 ring-[var(--color-accent)]/30"
+            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-secondary)]"
+        }`}
+        title="Switch conversation"
+      >
+        {anyStreaming ? (
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+          </span>
+        ) : (
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+          >
+            <path
+              fillRule="evenodd"
+              d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z"
+              clipRule="evenodd"
+            />
+          </svg>
+        )}
+        <span className="truncate max-w-[100px]">{displayName}</span>
+        <svg
+          className={`w-3 h-3 transition-transform ${isOpen ? "rotate-180" : ""}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={onToggle} />
+          <div className="absolute left-0 top-full mt-1 z-50 w-64 max-h-[50vh] overflow-y-auto bg-[var(--color-bg-secondary)] border border-[var(--color-border-default)] rounded-lg shadow-xl">
+            {conversations.map((conv) => {
+              const isActive = conv.id === activeConversationId;
+              const isConvStreaming = streamingConversationIds.has(conv.id);
+              return (
+                <div
+                  key={conv.id}
+                  className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-colors ${
+                    isConvStreaming && isActive
+                      ? "bg-green-500/15 border-l-2 border-l-green-500"
+                      : isConvStreaming
+                        ? "bg-green-500/8 border-l-2 border-l-green-500/60"
+                        : isActive
+                          ? "bg-[var(--color-accent)]/10 border-l-2 border-l-[var(--color-accent)]"
+                          : "hover:bg-[var(--color-bg-hover)] border-l-2 border-l-transparent"
+                  }`}
+                  onClick={() => onSwitch(conv.id)}
+                >
+                  <div className="flex-1 min-w-0">
+                    {editingId === conv.id ? (
+                      <input
+                        ref={editInputRef}
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename();
+                          if (e.key === "Escape") setEditingId(null);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full text-sm bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] border border-[var(--color-accent)] rounded px-1.5 py-0.5 outline-none"
+                      />
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-1.5">
+                          {isConvStreaming && (
+                            <span className="relative flex h-1.5 w-1.5 shrink-0">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
+                            </span>
+                          )}
+                          <span
+                            className={`text-sm truncate ${isActive ? "font-medium text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}
+                          >
+                            {conv.name}
+                          </span>
+                        </div>
+                        <div className={`text-xs ${isConvStreaming ? "text-green-400/80" : "text-[var(--color-text-tertiary)]"}`}>
+                          {isConvStreaming ? "Responding..." : `${conv.messageCount} messages`}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {editingId !== conv.id && (
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <button
+                        onClick={(e) => startRename(conv, e)}
+                        className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors"
+                        title="Rename conversation"
+                      >
+                        <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                        </svg>
+                      </button>
+                      {conv.id !== "default" && !isActive && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(conv.id);
+                          }}
+                          className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors"
+                          title="Delete conversation"
+                        >
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path
+                              fillRule="evenodd"
+                              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="border-t border-[var(--color-border-default)]">
+              <button
+                onClick={onNew}
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors"
+              >
+                <svg
+                  className="h-4 w-4 shrink-0"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                New Chat
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 interface OverflowMenuProps {
   onBrowseFiles: () => void;
   onViewChanges: () => void;
   onReset: () => void;
   onClearHistory: () => void;
+  onNewChat: () => void;
   onSwitchServer: () => void;
   hasProject: boolean;
   canClear: boolean;
@@ -94,6 +309,7 @@ function OverflowMenu({
   onViewChanges,
   onReset,
   onClearHistory,
+  onNewChat,
   onSwitchServer,
   hasProject,
   canClear,
@@ -169,6 +385,23 @@ function OverflowMenu({
                   <path d="M13.5 0H2.5A2.5 2.5 0 000 2.5v11A2.5 2.5 0 002.5 16h11a2.5 2.5 0 002.5-2.5v-11A2.5 2.5 0 0013.5 0zM1 2.5A1.5 1.5 0 012.5 1H8v6.5H1V2.5zM1 8.5h7V15H2.5A1.5 1.5 0 011 13.5V8.5zM9 15V8.5h6v5a1.5 1.5 0 01-1.5 1.5H9zm6-7.5H9V1h4.5A1.5 1.5 0 0115 2.5v5z" />
                 </svg>,
                 "View changes",
+              )}
+            {hasProject &&
+              menuItem(
+                onNewChat,
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z"
+                    clipRule="evenodd"
+                  />
+                </svg>,
+                "New chat",
               )}
             {menuItem(
               onReset,
@@ -273,7 +506,31 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
   const tokenExpiresAt = serverConfig.tokenExpiresAt || null;
   const tabsRestoredRef = useRef(false);
 
-  // Refs for streaming (per-project)
+  // Multi-conversation state (per project)
+  const [activeConversationIds, setActiveConversationIds] = useState<
+    Map<string, string>
+  >(new Map());
+  const [conversationLists, setConversationLists] = useState<
+    Map<string, ConversationInfo[]>
+  >(new Map());
+  const [showConversationList, setShowConversationList] = useState(false);
+
+  // Helper to get composite state key for project+conversation
+  const stateKey = useCallback(
+    (projectId: string, conversationId?: string) => {
+      const convId =
+        conversationId || activeConversationIds.get(projectId) || "default";
+      return `${projectId}:${convId}`;
+    },
+    [activeConversationIds],
+  );
+
+  // Get the active conversation ID for the active project
+  const activeConversationId = activeProjectId
+    ? activeConversationIds.get(activeProjectId) || "default"
+    : "default";
+
+  // Refs for streaming (per-project:conversation)
   const thinkingRefs = useRef<Map<string, string>>(new Map());
   const responseRefs = useRef<Map<string, string>>(new Map());
   const activityRefs = useRef<Map<string, ToolActivity[]>>(new Map());
@@ -311,9 +568,12 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     [],
   );
 
-  // Current active project state
+  // Current active project state (keyed by projectId:conversationId)
+  const activeStateKey = activeProjectId
+    ? stateKey(activeProjectId, activeConversationId)
+    : null;
   const activeState =
-    (activeProjectId ? projectStates.get(activeProjectId) : null) ||
+    (activeStateKey ? projectStates.get(activeStateKey) : null) ||
     createEmptyProjectState();
   const messages = activeState.messages;
   const isStreaming = activeState.isStreaming;
@@ -353,55 +613,77 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Fetch conversation history for a specific project
+  // Fetch conversation history for a specific project/conversation
   const fetchProjectConversation = useCallback(
-    async (projectId: string, retries = 3) => {
-      console.log(`Fetching conversation history for project: ${projectId}`);
+    async (projectId: string, conversationId?: string, retries = 3) => {
+      const convId = conversationId || "default";
+      const sKey = `${projectId}:${convId}`;
+      console.log(
+        `Fetching conversation history for project: ${projectId}, conv: ${convId}`,
+      );
       for (let attempt = 1; attempt <= retries; attempt++) {
         try {
+          const convPath = convId
+            ? `/${encodeURIComponent(convId)}`
+            : "";
           const res = await serverFetch(
-            `/api/projects/${encodeURIComponent(projectId)}/conversation`,
+            `/api/projects/${encodeURIComponent(projectId)}/conversation${convPath}`,
           );
           if (!res.ok)
             throw new Error(`Failed to fetch history: ${res.status}`);
           const data = await res.json();
           console.log(
-            `Loaded conversation for ${projectId}:`,
+            `Loaded conversation for ${projectId}/${convId}:`,
             data.messages?.length,
             "messages",
           );
-          if (data.messages && data.messages.length > 0) {
-            const loadedMessages = data.messages.map(
-              (m: {
-                role: string;
-                content: string;
-                task?: string;
-                chunks?: OutputChunk[];
-                thinking?: string;
-                activity?: ToolActivity[];
-                startedAt?: string;
-                completedAt?: string;
-              }) => ({
-                role: m.role as "user" | "assistant",
-                content: m.content,
-                task: m.task,
-                chunks: m.chunks,
-                thinking: m.thinking,
-                activity: m.activity,
-                startedAt: m.startedAt,
-                completedAt: m.completedAt,
-              }),
-            );
-            updateProjectState(projectId, (state) => ({
-              ...state,
-              messages: loadedMessages,
-            }));
+          const loadedMessages = (data.messages || []).map(
+            (m: {
+              role: string;
+              content: string;
+              task?: string;
+              chunks?: OutputChunk[];
+              thinking?: string;
+              activity?: ToolActivity[];
+              startedAt?: string;
+              completedAt?: string;
+            }) => ({
+              role: m.role as "user" | "assistant",
+              content: m.content,
+              task: m.task,
+              chunks: m.chunks,
+              thinking: m.thinking,
+              activity: m.activity,
+              startedAt: m.startedAt,
+              completedAt: m.completedAt,
+            }),
+          );
+          updateProjectState(sKey, (state) => ({
+            ...state,
+            messages: loadedMessages,
+          }));
+          if (loadedMessages.length > 0) {
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
                 messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
               });
             });
           }
+          // Fetch conversation list after history load (migration may have just run)
+          serverFetch(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations`,
+          )
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (data?.conversations) {
+                setConversationLists((prev) => {
+                  const next = new Map(prev);
+                  next.set(projectId, data.conversations);
+                  return next;
+                });
+              }
+            })
+            .catch(() => {});
           return;
         } catch (err) {
           console.error(
@@ -418,15 +700,39 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     [serverFetch, updateProjectState],
   );
 
+  // Fetch conversation list for a project
+  const fetchConversationList = useCallback(
+    async (projectId: string) => {
+      try {
+        const res = await serverFetch(
+          `/api/projects/${encodeURIComponent(projectId)}/conversations`,
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        setConversationLists((prev) => {
+          const next = new Map(prev);
+          next.set(projectId, data.conversations || []);
+          return next;
+        });
+      } catch (err) {
+        console.error("Failed to fetch conversations:", err);
+      }
+    },
+    [serverFetch],
+  );
+
   const clearHistory = async () => {
-    if (!activeProjectId) return;
+    if (!activeProjectId || !activeStateKey) return;
     try {
+      const convPath = activeConversationId
+        ? `/${encodeURIComponent(activeConversationId)}`
+        : "";
       const res = await serverFetch(
-        `/api/projects/${encodeURIComponent(activeProjectId)}/conversation`,
+        `/api/projects/${encodeURIComponent(activeProjectId)}/conversation${convPath}`,
         { method: "DELETE" },
       );
       if (!res.ok) throw new Error(`Failed to clear history: ${res.status}`);
-      updateProjectState(activeProjectId, (state) => ({
+      updateProjectState(activeStateKey, (state) => ({
         ...state,
         messages: [],
       }));
@@ -434,6 +740,28 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       setError(`Failed to clear history: ${err}`);
     }
   };
+
+  // Track the visual viewport so the app container always matches the visible
+  // area, even when the mobile keyboard is open. We track both height (viewport
+  // shrinks) and offsetTop (browser may scroll the layout viewport).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+
+    const update = () => {
+      root.style.setProperty("--app-height", `${vv.height}px`);
+      root.style.setProperty("--app-top", `${vv.offsetTop}px`);
+    };
+
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
 
   // Scroll to bottom when new messages arrive or project changes
   const messagesLength = messages.length;
@@ -486,6 +814,24 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     }
   }, [activeProjectId, activeProjectKey]);
 
+  // Persist active conversation IDs to localStorage
+  const initialConvRef = useRef(true);
+  useEffect(() => {
+    if (initialConvRef.current) {
+      initialConvRef.current = false;
+      return;
+    }
+    const convKey = `claude-remote-convIds-${serverConfig.id}`;
+    if (activeConversationIds.size > 0) {
+      localStorage.setItem(
+        convKey,
+        JSON.stringify(Object.fromEntries(activeConversationIds)),
+      );
+    } else {
+      localStorage.removeItem(convKey);
+    }
+  }, [activeConversationIds, serverConfig.id]);
+
   useEffect(() => {
     const cachedPin = cachedPinRef.current;
     if (cachedPin) {
@@ -494,6 +840,19 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       // Restore tabs from localStorage
       const savedProjects = localStorage.getItem(projectsKey);
       const savedActiveId = localStorage.getItem(activeProjectKey);
+      const savedConvIds = localStorage.getItem(
+        `claude-remote-convIds-${serverConfig.id}`,
+      );
+      let restoredConvIds = new Map<string, string>();
+      if (savedConvIds) {
+        try {
+          restoredConvIds = new Map(Object.entries(JSON.parse(savedConvIds)));
+        } catch {
+          // ignore
+        }
+      }
+      setActiveConversationIds(restoredConvIds);
+
       if (savedProjects) {
         try {
           const projects: Project[] = JSON.parse(savedProjects);
@@ -501,7 +860,8 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             setOpenProjects(projects);
             const newStates = new Map<string, ProjectState>();
             projects.forEach((p) => {
-              newStates.set(p.id, createEmptyProjectState());
+              const convId = restoredConvIds.get(p.id) || "default";
+              newStates.set(`${p.id}:${convId}`, createEmptyProjectState());
             });
             setProjectStates(newStates);
             const activeId =
@@ -598,7 +958,9 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           thinking?: string;
           error?: string;
           projectId?: string;
+          conversationId?: string;
           activeProjectIds?: string[];
+          activeConversationMap?: Record<string, string>;
           activity?: ToolActivity[];
           toolUse?: {
             tool: string;
@@ -606,6 +968,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             input: Record<string, unknown>;
           };
           toolResult?: { tool: string; output?: string; error?: string };
+          name?: string;
         };
         try {
           msg = JSON.parse(decrypted);
@@ -615,6 +978,11 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
         }
 
         const projectId = msg.projectId;
+        const conversationId = msg.conversationId;
+        // Compute the state key for this event
+        const eventKey = projectId
+          ? `${projectId}:${conversationId || "default"}`
+          : null;
 
         if (msg.type === "auth_ok") {
           // Show reconnected banner if we were reconnecting (not initial connect)
@@ -667,14 +1035,17 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             });
 
           const activeIds = msg.activeProjectIds || [];
+          const activeConvMap = msg.activeConversationMap || {};
           if (activeIds.length > 0) {
             console.log("Active streaming projects on reconnect:", activeIds);
             setStreamingProjectIds(
               new Set(activeIds.filter((id) => id !== "__global__")),
             );
-            activeIds.forEach((projectId) => {
-              if (projectId !== "__global__") {
-                updateProjectState(projectId, (state) => ({
+            activeIds.forEach((pid) => {
+              if (pid !== "__global__") {
+                const cid = activeConvMap[pid] || "default";
+                const sKey = `${pid}:${cid}`;
+                updateProjectState(sKey, (state) => ({
                   ...state,
                   isStreaming: true,
                 }));
@@ -687,6 +1058,22 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             const savedProjects = localStorage.getItem(projectsKey);
             const savedActiveId = localStorage.getItem(activeProjectKey);
 
+            // Restore saved conversation IDs
+            const savedConvIds = localStorage.getItem(
+              `claude-remote-convIds-${serverConfig.id}`,
+            );
+            let restoredConvIds = new Map<string, string>();
+            if (savedConvIds) {
+              try {
+                restoredConvIds = new Map(
+                  Object.entries(JSON.parse(savedConvIds)),
+                );
+              } catch {
+                // ignore
+              }
+            }
+            setActiveConversationIds(restoredConvIds);
+
             if (savedProjects) {
               try {
                 const projects: Project[] = JSON.parse(savedProjects);
@@ -694,10 +1081,12 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
                   setOpenProjects(projects);
                   const newStates = new Map<string, ProjectState>();
                   projects.forEach((p) => {
-                    const isStreaming = activeIds.includes(p.id);
-                    newStates.set(p.id, {
+                    const convId = restoredConvIds.get(p.id) || "default";
+                    const sKey = `${p.id}:${convId}`;
+                    const pIsStreaming = activeIds.includes(p.id);
+                    newStates.set(sKey, {
                       ...createEmptyProjectState(),
-                      isStreaming,
+                      isStreaming: pIsStreaming,
                     });
                   });
                   setProjectStates(newStates);
@@ -708,7 +1097,10 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
                       : projects[0].id;
                   setActiveProjectId(activeId);
                   projects.forEach((p) => {
-                    fetchProjectConversation(p.id);
+                    const convId = restoredConvIds.get(p.id) || "default";
+                    // fetchProjectConversation already fetches the conversation list
+                    // after history loads (post-migration), so no separate call needed
+                    fetchProjectConversation(p.id, convId);
                   });
                   return;
                 }
@@ -718,11 +1110,53 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             }
             setShowProjectPicker(true);
           } else {
+            // Reconnect path: clear stale streaming state before re-fetching
+            setStreamingProjectIds(new Set());
+            setProjectStates((prev) => {
+              const next = new Map(prev);
+              for (const [key, state] of next) {
+                if (state.isStreaming || state.currentResponse || state.currentThinking) {
+                  next.set(key, {
+                    ...state,
+                    isStreaming: false,
+                    currentResponse: "",
+                    currentThinking: "",
+                    currentActivity: [],
+                    currentTask: "",
+                    taskStartTime: null,
+                    statusMessage: "",
+                  });
+                }
+              }
+              return next;
+            });
+            thinkingRefs.current.clear();
+            responseRefs.current.clear();
+            activityRefs.current.clear();
+
+            // Re-fetch history for all open projects
             const savedProjects = localStorage.getItem(projectsKey);
             if (savedProjects) {
               try {
                 const projects: Project[] = JSON.parse(savedProjects);
-                projects.forEach((p) => fetchProjectConversation(p.id));
+                // Read conversation IDs from localStorage (state may be stale in this closure)
+                const savedConvIds = localStorage.getItem(
+                  `claude-remote-convIds-${serverConfig.id}`,
+                );
+                let convIds = new Map<string, string>();
+                if (savedConvIds) {
+                  try {
+                    convIds = new Map(
+                      Object.entries(JSON.parse(savedConvIds)),
+                    );
+                  } catch {
+                    // ignore
+                  }
+                }
+                projects.forEach((p) => {
+                  const convId = convIds.get(p.id) || "default";
+                  fetchProjectConversation(p.id, convId);
+                });
               } catch {
                 // ignore invalid JSON in saved projects
               }
@@ -765,55 +1199,55 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             );
             setView("pin");
           }
-        } else if (msg.type === "streaming_restore" && projectId) {
-          console.log(`Restoring streaming state for ${projectId}:`, {
+        } else if (msg.type === "streaming_restore" && eventKey) {
+          console.log(`Restoring streaming state for ${eventKey}:`, {
             thinking: msg.thinking?.length || 0,
             text: msg.text?.length || 0,
             activity: msg.activity?.length || 0,
           });
 
-          if (msg.thinking) thinkingRefs.current.set(projectId, msg.thinking);
-          if (msg.text) responseRefs.current.set(projectId, msg.text);
+          if (msg.thinking) thinkingRefs.current.set(eventKey, msg.thinking);
+          if (msg.text) responseRefs.current.set(eventKey, msg.text);
           if (msg.activity && msg.activity.length > 0)
-            activityRefs.current.set(projectId, msg.activity);
+            activityRefs.current.set(eventKey, msg.activity);
 
-          updateProjectState(projectId, (state) => ({
+          updateProjectState(eventKey, (state) => ({
             ...state,
             isStreaming: true,
             currentThinking: msg.thinking || "",
             currentResponse: msg.text || "",
             currentActivity: msg.activity || [],
           }));
-        } else if (msg.type === "status" && projectId) {
-          updateProjectState(projectId, (state) => ({
+        } else if (msg.type === "status" && eventKey) {
+          updateProjectState(eventKey, (state) => ({
             ...state,
             statusMessage: msg.text || "",
             lastEventTime: Date.now(),
           }));
-        } else if (msg.type === "thinking" && projectId) {
-          const currentThinking = thinkingRefs.current.get(projectId) || "";
+        } else if (msg.type === "thinking" && eventKey) {
+          const currentThinking = thinkingRefs.current.get(eventKey) || "";
           thinkingRefs.current.set(
-            projectId,
+            eventKey,
             currentThinking + (msg.text || ""),
           );
-          updateProjectState(projectId, (state) => ({
+          updateProjectState(eventKey, (state) => ({
             ...state,
-            currentThinking: thinkingRefs.current.get(projectId) || "",
+            currentThinking: thinkingRefs.current.get(eventKey) || "",
             lastEventTime: Date.now(),
           }));
-        } else if (msg.type === "text" && projectId) {
-          const currentResponse = responseRefs.current.get(projectId) || "";
+        } else if (msg.type === "text" && eventKey) {
+          const currentResponse = responseRefs.current.get(eventKey) || "";
           const delimiter = currentResponse ? "\n" : "";
           responseRefs.current.set(
-            projectId,
+            eventKey,
             currentResponse + delimiter + (msg.text || ""),
           );
-          updateProjectState(projectId, (state) => ({
+          updateProjectState(eventKey, (state) => ({
             ...state,
-            currentResponse: responseRefs.current.get(projectId) || "",
+            currentResponse: responseRefs.current.get(eventKey) || "",
             lastEventTime: Date.now(),
           }));
-        } else if (msg.type === "tool_use" && msg.toolUse && projectId) {
+        } else if (msg.type === "tool_use" && msg.toolUse && eventKey) {
           const activity: ToolActivity = {
             type: "tool_use",
             tool: msg.toolUse.tool,
@@ -821,16 +1255,16 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             input: msg.toolUse.input,
             timestamp: Date.now(),
           };
-          const currentActivity = activityRefs.current.get(projectId) || [];
-          activityRefs.current.set(projectId, [...currentActivity, activity]);
+          const currentActivity = activityRefs.current.get(eventKey) || [];
+          activityRefs.current.set(eventKey, [...currentActivity, activity]);
 
           if (
             msg.toolUse.tool === "AskUserQuestion" &&
             msg.toolUse.input?.questions
           ) {
-            updateProjectState(projectId, (state) => ({
+            updateProjectState(eventKey, (state) => ({
               ...state,
-              currentActivity: activityRefs.current.get(projectId) || [],
+              currentActivity: activityRefs.current.get(eventKey) || [],
               lastEventTime: Date.now(),
               pendingQuestion: {
                 toolUseId: msg.toolUse!.id || "",
@@ -839,13 +1273,13 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
               },
             }));
           } else {
-            updateProjectState(projectId, (state) => ({
+            updateProjectState(eventKey, (state) => ({
               ...state,
-              currentActivity: activityRefs.current.get(projectId) || [],
+              currentActivity: activityRefs.current.get(eventKey) || [],
               lastEventTime: Date.now(),
             }));
           }
-        } else if (msg.type === "tool_result" && msg.toolResult && projectId) {
+        } else if (msg.type === "tool_result" && msg.toolResult && eventKey) {
           const activity: ToolActivity = {
             type: "tool_result",
             tool: msg.toolResult.tool,
@@ -853,25 +1287,27 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             error: msg.toolResult.error,
             timestamp: Date.now(),
           };
-          const currentActivity = activityRefs.current.get(projectId) || [];
-          activityRefs.current.set(projectId, [...currentActivity, activity]);
-          updateProjectState(projectId, (state) => ({
+          const currentActivity = activityRefs.current.get(eventKey) || [];
+          activityRefs.current.set(eventKey, [...currentActivity, activity]);
+          updateProjectState(eventKey, (state) => ({
             ...state,
-            currentActivity: activityRefs.current.get(projectId) || [],
+            currentActivity: activityRefs.current.get(eventKey) || [],
             lastEventTime: Date.now(),
           }));
-        } else if (msg.type === "done" && projectId) {
-          const thinking = thinkingRefs.current.get(projectId) || "";
-          const response = responseRefs.current.get(projectId) || "";
-          const activity = activityRefs.current.get(projectId) || [];
+        } else if (msg.type === "done" && eventKey) {
+          const thinking = thinkingRefs.current.get(eventKey) || "";
+          const response = responseRefs.current.get(eventKey) || "";
+          const activity = activityRefs.current.get(eventKey) || [];
 
-          setStreamingProjectIds((prev) => {
-            const next = new Set(prev);
-            next.delete(projectId);
-            return next;
-          });
+          if (projectId) {
+            setStreamingProjectIds((prev) => {
+              const next = new Set(prev);
+              next.delete(projectId);
+              return next;
+            });
+          }
 
-          updateProjectState(projectId, (state) => {
+          updateProjectState(eventKey, (state) => {
             const task = state.currentTask;
             const startedAt = state.taskStartTime
               ? new Date(state.taskStartTime).toISOString()
@@ -905,28 +1341,29 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             };
           });
 
-          thinkingRefs.current.delete(projectId);
-          responseRefs.current.delete(projectId);
-          activityRefs.current.delete(projectId);
+          thinkingRefs.current.delete(eventKey);
+          responseRefs.current.delete(eventKey);
+          activityRefs.current.delete(eventKey);
         } else if (msg.type === "error") {
           console.error("Server error:", msg.error);
           setError(msg.error || "Unknown server error");
-          if (projectId) {
+          if (eventKey && projectId) {
             setStreamingProjectIds((prev) => {
               const next = new Set(prev);
               next.delete(projectId);
               return next;
             });
-            updateProjectState(projectId, (state) => ({
+            updateProjectState(eventKey, (state) => ({
               ...state,
               isStreaming: false,
             }));
           }
         } else if (msg.type === "sync_user_message" && msg.projectId) {
+          const syncKey = `${msg.projectId}:${msg.conversationId || "default"}`;
           console.log(
-            `[sync] User message from another device for ${msg.projectId}`,
+            `[sync] User message from another device for ${syncKey}`,
           );
-          updateProjectState(msg.projectId, (state) => ({
+          updateProjectState(syncKey, (state) => ({
             ...state,
             messages: [
               ...state.messages,
@@ -940,20 +1377,34 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             taskStartTime: Date.now(),
           }));
           setStreamingProjectIds((prev) => new Set(prev).add(msg.projectId!));
-          thinkingRefs.current.set(msg.projectId, "");
-          responseRefs.current.set(msg.projectId, "");
-          activityRefs.current.set(msg.projectId, []);
+          thinkingRefs.current.set(syncKey, "");
+          responseRefs.current.set(syncKey, "");
+          activityRefs.current.set(syncKey, []);
         } else if (msg.type === "sync_cancel" && msg.projectId) {
-          console.log(`[sync] Cancel from another device for ${msg.projectId}`);
+          const syncKey = `${msg.projectId}:${msg.conversationId || "default"}`;
+          console.log(`[sync] Cancel from another device for ${syncKey}`);
           setStreamingProjectIds((prev) => {
             const next = new Set(prev);
             next.delete(msg.projectId!);
             return next;
           });
-          updateProjectState(msg.projectId, (state) => ({
+          updateProjectState(syncKey, (state) => ({
             ...state,
             isStreaming: false,
           }));
+        } else if (msg.type === "conversation_renamed" && msg.projectId && msg.conversationId && msg.name) {
+          // Server auto-named a conversation — update the local list
+          setConversationLists((prev) => {
+            const next = new Map(prev);
+            const list = next.get(msg.projectId!) || [];
+            next.set(
+              msg.projectId!,
+              list.map((c) =>
+                c.id === msg.conversationId ? { ...c, name: msg.name! } : c,
+              ),
+            );
+            return next;
+          });
         } else {
           console.log("Unknown message type:", msg.type, msg);
         }
@@ -1090,8 +1541,11 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
 
       setError("");
 
+      const convId = activeConversationIds.get(activeProjectId) || "default";
+      const sKey = `${activeProjectId}:${convId}`;
+
       const taskStartTime = Date.now();
-      updateProjectState(activeProjectId, (state) => ({
+      updateProjectState(sKey, (state) => ({
         ...state,
         messages: [...state.messages, { role: "user" as const, content: text }],
         isStreaming: true,
@@ -1104,13 +1558,18 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
 
       setStreamingProjectIds((prev) => new Set(prev).add(activeProjectId));
 
-      thinkingRefs.current.set(activeProjectId, "");
-      responseRefs.current.set(activeProjectId, "");
-      activityRefs.current.set(activeProjectId, []);
+      thinkingRefs.current.set(sKey, "");
+      responseRefs.current.set(sKey, "");
+      activityRefs.current.set(sKey, []);
 
       try {
         const encrypted = await encrypt(
-          JSON.stringify({ type: "message", text, projectId: activeProjectId }),
+          JSON.stringify({
+            type: "message",
+            text,
+            projectId: activeProjectId,
+            conversationId: convId !== "default" ? convId : undefined,
+          }),
           sharedKeyRef.current,
         );
         wsRef.current.send(JSON.stringify(encrypted));
@@ -1122,24 +1581,27 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           next.delete(activeProjectId);
           return next;
         });
-        updateProjectState(activeProjectId, (state) => ({
+        updateProjectState(sKey, (state) => ({
           ...state,
           isStreaming: false,
         }));
       }
     },
-    [activeProjectId, isStreaming, updateProjectState],
+    [activeProjectId, activeConversationIds, isStreaming, updateProjectState],
   );
 
   const handleCancel = useCallback(async () => {
     if (!activeProjectId) return;
+
+    const convId = activeConversationIds.get(activeProjectId) || "default";
+    const sKey = `${activeProjectId}:${convId}`;
 
     setStreamingProjectIds((prev) => {
       const next = new Set(prev);
       next.delete(activeProjectId);
       return next;
     });
-    updateProjectState(activeProjectId, (state) => ({
+    updateProjectState(sKey, (state) => ({
       ...state,
       isStreaming: false,
     }));
@@ -1151,7 +1613,11 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     ) {
       try {
         const encrypted = await encrypt(
-          JSON.stringify({ type: "cancel", projectId: activeProjectId }),
+          JSON.stringify({
+            type: "cancel",
+            projectId: activeProjectId,
+            conversationId: convId !== "default" ? convId : undefined,
+          }),
           sharedKeyRef.current,
         );
         wsRef.current.send(JSON.stringify(encrypted));
@@ -1163,7 +1629,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     serverFetch(`/api/projects/${encodeURIComponent(activeProjectId)}/cancel`, {
       method: "POST",
     }).catch((err) => console.error("[cancel] HTTP cancel failed:", err));
-  }, [activeProjectId, updateProjectState, serverFetch]);
+  }, [activeProjectId, activeConversationIds, updateProjectState, serverFetch]);
 
   const handleToolAnswer = useCallback(
     async (answers: Array<{ header: string; answer: string }>) => {
@@ -1177,7 +1643,10 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
         return;
       }
 
-      updateProjectState(activeProjectId, (state) => ({
+      const convId = activeConversationIds.get(activeProjectId) || "default";
+      const sKey = `${activeProjectId}:${convId}`;
+
+      updateProjectState(sKey, (state) => ({
         ...state,
         pendingQuestion: null,
         isStreaming: true,
@@ -1187,9 +1656,9 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       }));
 
       setStreamingProjectIds((prev) => new Set(prev).add(activeProjectId));
-      thinkingRefs.current.set(activeProjectId, "");
-      responseRefs.current.set(activeProjectId, "");
-      activityRefs.current.set(activeProjectId, []);
+      thinkingRefs.current.set(sKey, "");
+      responseRefs.current.set(sKey, "");
+      activityRefs.current.set(sKey, []);
 
       try {
         const encrypted = await encrypt(
@@ -1197,42 +1666,45 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             type: "tool_answer",
             answers,
             projectId: activeProjectId,
+            conversationId: convId !== "default" ? convId : undefined,
           }),
           sharedKeyRef.current,
         );
         wsRef.current.send(JSON.stringify(encrypted));
       } catch (err) {
         setError(`Failed to send answer: ${err}`);
-        updateProjectState(activeProjectId, (state) => ({
+        updateProjectState(sKey, (state) => ({
           ...state,
           isStreaming: false,
         }));
       }
     },
-    [activeProjectId, updateProjectState],
+    [activeProjectId, activeConversationIds, updateProjectState],
   );
 
   const handleDismissQuestion = useCallback(() => {
-    if (!activeProjectId) return;
-    updateProjectState(activeProjectId, (state) => ({
+    if (!activeProjectId || !activeStateKey) return;
+    updateProjectState(activeStateKey, (state) => ({
       ...state,
       pendingQuestion: null,
     }));
-  }, [activeProjectId, updateProjectState]);
+  }, [activeProjectId, activeStateKey, updateProjectState]);
 
   const handleSelectProject = (project: Project) => {
     console.log("Selected project:", project.id);
 
     if (!openProjects.find((p) => p.id === project.id)) {
       setOpenProjects((prev) => [...prev, project]);
-      if (!projectStates.has(project.id)) {
+      const convId = activeConversationIds.get(project.id) || "default";
+      const sKey = `${project.id}:${convId}`;
+      if (!projectStates.has(sKey)) {
         setProjectStates((prev) => {
           const next = new Map(prev);
-          next.set(project.id, createEmptyProjectState());
+          next.set(sKey, createEmptyProjectState());
           return next;
         });
       }
-      fetchProjectConversation(project.id);
+      fetchProjectConversation(project.id, convId);
     }
 
     setActiveProjectId(project.id);
@@ -1249,22 +1721,27 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       );
     }
 
+    // Remove all state keys for this project (any conversation)
     setProjectStates((prev) => {
       const next = new Map(prev);
-      next.delete(projectId);
+      for (const key of prev.keys()) {
+        if (key.startsWith(`${projectId}:`)) {
+          next.delete(key);
+        }
+      }
       return next;
     });
   };
 
   const handleReset = () => {
     setError("");
-    if (activeProjectId) {
+    if (activeProjectId && activeStateKey) {
       setStreamingProjectIds((prev) => {
         const next = new Set(prev);
         next.delete(activeProjectId);
         return next;
       });
-      updateProjectState(activeProjectId, (state) => ({
+      updateProjectState(activeStateKey, (state) => ({
         ...state,
         isStreaming: false,
         currentThinking: "",
@@ -1276,6 +1753,141 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     }
     console.log("State reset by user");
   };
+
+  // Conversation management handlers
+  const handleNewConversation = async () => {
+    if (!activeProjectId) return;
+    try {
+      const res = await serverFetch(
+        `/api/projects/${encodeURIComponent(activeProjectId)}/conversations`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error(`Failed to create conversation: ${res.status}`);
+      const data = await res.json();
+      const newConvId = data.conversation.id;
+      console.log("Created new conversation:", newConvId);
+
+      // Update active conversation for this project
+      setActiveConversationIds((prev) => {
+        const next = new Map(prev);
+        next.set(activeProjectId, newConvId);
+        return next;
+      });
+
+      // Create empty state for new conversation
+      const sKey = `${activeProjectId}:${newConvId}`;
+      setProjectStates((prev) => {
+        const next = new Map(prev);
+        next.set(sKey, createEmptyProjectState());
+        return next;
+      });
+
+      // Refresh conversation list
+      fetchConversationList(activeProjectId);
+      setShowConversationList(false);
+    } catch (err) {
+      setError(`Failed to create conversation: ${err}`);
+    }
+  };
+
+  const handleSwitchConversation = (conversationId: string) => {
+    if (!activeProjectId) return;
+    const sKey = `${activeProjectId}:${conversationId}`;
+
+    setActiveConversationIds((prev) => {
+      const next = new Map(prev);
+      next.set(activeProjectId, conversationId);
+      return next;
+    });
+
+    // Initialize state if not loaded yet
+    if (!projectStates.has(sKey)) {
+      setProjectStates((prev) => {
+        const next = new Map(prev);
+        next.set(sKey, createEmptyProjectState());
+        return next;
+      });
+      fetchProjectConversation(activeProjectId, conversationId);
+    }
+
+    setShowConversationList(false);
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (!activeProjectId) return;
+    try {
+      const res = await serverFetch(
+        `/api/projects/${encodeURIComponent(activeProjectId)}/conversations/${encodeURIComponent(conversationId)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`);
+
+      // If deleted the active conversation, switch to default
+      const currentConvId =
+        activeConversationIds.get(activeProjectId) || "default";
+      if (currentConvId === conversationId) {
+        handleSwitchConversation("default");
+      }
+
+      // Remove state
+      const sKey = `${activeProjectId}:${conversationId}`;
+      setProjectStates((prev) => {
+        const next = new Map(prev);
+        next.delete(sKey);
+        return next;
+      });
+
+      fetchConversationList(activeProjectId);
+    } catch (err) {
+      setError(`Failed to delete conversation: ${err}`);
+    }
+  };
+
+  const handleRenameConversation = async (conversationId: string, name: string) => {
+    if (!activeProjectId) return;
+    try {
+      const res = await serverFetch(
+        `/api/projects/${encodeURIComponent(activeProjectId)}/conversations/${encodeURIComponent(conversationId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        },
+      );
+      if (!res.ok) throw new Error(`Failed to rename conversation: ${res.status}`);
+
+      // Update local conversation list
+      setConversationLists((prev) => {
+        const next = new Map(prev);
+        const list = next.get(activeProjectId) || [];
+        next.set(
+          activeProjectId,
+          list.map((c) => (c.id === conversationId ? { ...c, name } : c)),
+        );
+        return next;
+      });
+    } catch (err) {
+      setError(`Failed to rename conversation: ${err}`);
+    }
+  };
+
+  // Get current conversation list for active project
+  const currentConversations =
+    (activeProjectId ? conversationLists.get(activeProjectId) : null) || [];
+
+  // Compute which conversations in the current project are streaming
+  const streamingConversationIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!activeProjectId) return ids;
+    for (const conv of currentConversations) {
+      const key = `${activeProjectId}:${conv.id}`;
+      const state = projectStates.get(key);
+      if (state?.isStreaming) {
+        ids.add(conv.id);
+      }
+    }
+    return ids;
+  }, [activeProjectId, currentConversations, projectStates]);
 
   if (view === "pin") {
     return (
@@ -1318,9 +1930,15 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
   }
 
   return (
-    <main className="h-[100dvh] flex flex-col bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
+    <main
+      className="fixed left-0 right-0 flex flex-col overflow-hidden bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]"
+      style={{
+        height: "var(--app-height, 100vh)",
+        top: "var(--app-top, 0px)",
+      }}
+    >
       {/* Header: Project dropdown + git status + overflow menu */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border-default)] bg-[var(--color-bg-primary)] sticky top-0 z-20">
+      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border-default)] bg-[var(--color-bg-primary)] shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <ProjectTabs
             projects={openProjects}
@@ -1330,6 +1948,19 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
             onCloseProject={handleCloseProject}
             onAddProject={() => setShowProjectPicker(true)}
           />
+          {activeProjectId && currentConversations.length > 1 && (
+            <ConversationSwitcher
+              conversations={currentConversations}
+              activeConversationId={activeConversationId}
+              streamingConversationIds={streamingConversationIds}
+              onSwitch={handleSwitchConversation}
+              onNew={handleNewConversation}
+              onDelete={handleDeleteConversation}
+              onRename={handleRenameConversation}
+              isOpen={showConversationList}
+              onToggle={() => setShowConversationList(!showConversationList)}
+            />
+          )}
           <GitStatus
             projectId={activeProjectId}
             serverId={serverConfig.id}
@@ -1343,6 +1974,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           onViewChanges={() => setShowDiffViewer(true)}
           onReset={handleReset}
           onClearHistory={clearHistory}
+          onNewChat={handleNewConversation}
           onSwitchServer={() => onNavigate("servers")}
           hasProject={!!activeProjectId}
           canClear={!isStreaming && !!activeProjectId}

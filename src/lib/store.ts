@@ -5,6 +5,8 @@ import {
   existsSync,
   readdirSync,
   statSync,
+  renameSync,
+  unlinkSync,
 } from "fs";
 import { join, basename, resolve } from "path";
 import { homedir } from "os";
@@ -85,8 +87,17 @@ export interface Project {
 
 export interface ProjectConversation {
   projectId: string;
+  conversationId: string;
   messages: Message[];
   claudeSessionId: string | null;
+  updatedAt: string;
+}
+
+export interface ConversationInfo {
+  id: string;
+  name: string;
+  messageCount: number;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -312,6 +323,68 @@ function ensureProjectConfigDir(projectId: string): void {
   }
 }
 
+function getConversationsDir(projectId: string): string {
+  return join(getProjectConfigDir(projectId), "conversations");
+}
+
+function ensureConversationsDir(projectId: string): void {
+  const dir = getConversationsDir(projectId);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+function getConversationFilePath(
+  projectId: string,
+  conversationId: string,
+): string {
+  // Sanitize conversationId to prevent path traversal
+  if (
+    conversationId.includes("..") ||
+    conversationId.includes("/") ||
+    conversationId.includes("\\") ||
+    conversationId.includes("\0")
+  ) {
+    throw new Error(`Invalid conversation ID: ${conversationId}`);
+  }
+  return join(getConversationsDir(projectId), `${conversationId}.json`);
+}
+
+function generateConversationId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// Migrate old conversation.json to conversations/default.json
+function migrateProjectConversation(projectId: string): void {
+  const oldPath = join(getProjectConfigDir(projectId), "conversation.json");
+  const newDir = getConversationsDir(projectId);
+  const newPath = join(newDir, "default.json");
+
+  if (existsSync(oldPath) && !existsSync(newDir)) {
+    console.log(
+      `[store] Migrating project ${projectId} conversation to multi-conversation format`,
+    );
+    mkdirSync(newDir, { recursive: true });
+    try {
+      const data = JSON.parse(readFileSync(oldPath, "utf8"));
+      const migrated = {
+        ...data,
+        conversationId: "default",
+        name: "Default",
+        createdAt: data.updatedAt || new Date().toISOString(),
+      };
+      writeFileSync(newPath, JSON.stringify(migrated, null, 2));
+      // Keep old file as backup but rename it
+      renameSync(oldPath, oldPath + ".bak");
+    } catch (err) {
+      console.error(
+        `[store] Failed to migrate conversation for ${projectId}:`,
+        err,
+      );
+    }
+  }
+}
+
 // Check if a directory looks like a project
 function hasProjectMarkers(dir: string): boolean {
   const markers = [
@@ -398,7 +471,7 @@ function sanitizeBranchForDir(branch: string): string {
   return branch.replace(/\//g, "-");
 }
 
-// List all available projects from ~/projects
+// List all available projects from the configured base path
 export function listProjects(basePath?: string): Project[] {
   const projectsBase = basePath || DEFAULT_PROJECTS_BASE;
 
@@ -423,13 +496,36 @@ export function listProjects(basePath?: string): Project[] {
           // Check if we have stored lastAccessed
           let lastAccessed: string | undefined;
           try {
-            const convPath = join(
-              getProjectConfigDir(dir),
-              "conversation.json",
-            );
-            if (existsSync(convPath)) {
-              const conv = JSON.parse(readFileSync(convPath, "utf8"));
-              lastAccessed = conv.updatedAt;
+            // Check new multi-conversation dir first, then legacy
+            const convsDir = join(getProjectConfigDir(dir), "conversations");
+            if (existsSync(convsDir)) {
+              const convFiles = readdirSync(convsDir).filter((f) =>
+                f.endsWith(".json"),
+              );
+              for (const f of convFiles) {
+                try {
+                  const conv = JSON.parse(
+                    readFileSync(join(convsDir, f), "utf8"),
+                  );
+                  if (
+                    conv.updatedAt &&
+                    (!lastAccessed || conv.updatedAt > lastAccessed)
+                  ) {
+                    lastAccessed = conv.updatedAt;
+                  }
+                } catch {
+                  // skip
+                }
+              }
+            } else {
+              const convPath = join(
+                getProjectConfigDir(dir),
+                "conversation.json",
+              );
+              if (existsSync(convPath)) {
+                const conv = JSON.parse(readFileSync(convPath, "utf8"));
+                lastAccessed = conv.updatedAt;
+              }
             }
           } catch {
             // Ignore
@@ -470,35 +566,172 @@ export function listProjects(basePath?: string): Project[] {
   }
 }
 
-// Load conversation for a specific project
+// ============================================
+// Multi-conversation functions
+// ============================================
+
+// List all conversations for a project
+export function listProjectConversations(
+  projectId: string,
+): ConversationInfo[] {
+  migrateProjectConversation(projectId);
+  const dir = getConversationsDir(projectId);
+  if (!existsSync(dir)) return [];
+
+  try {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+    const conversations: ConversationInfo[] = [];
+
+    for (const file of files) {
+      try {
+        const data = JSON.parse(readFileSync(join(dir, file), "utf8"));
+        const id = file.replace(".json", "");
+        conversations.push({
+          id,
+          name: data.name || (id === "default" ? "Default" : `Chat ${id}`),
+          messageCount: (data.messages || []).length,
+          createdAt: data.createdAt || data.updatedAt || new Date().toISOString(),
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        });
+      } catch {
+        // Skip corrupt files
+      }
+    }
+
+    // Sort by updatedAt descending (most recent first)
+    return conversations.sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+  } catch (err) {
+    console.error(
+      `[store] Failed to list conversations for ${projectId}:`,
+      err,
+    );
+    return [];
+  }
+}
+
+// Create a new conversation for a project
+export function createProjectConversation(
+  projectId: string,
+  name?: string,
+): ConversationInfo {
+  ensureProjectsDir();
+  ensureProjectConfigDir(projectId);
+  ensureConversationsDir(projectId);
+
+  const id = generateConversationId();
+  const now = new Date().toISOString();
+  const conversation = {
+    conversationId: id,
+    name: name || "New Chat",
+    messages: [],
+    claudeSessionId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const filePath = getConversationFilePath(projectId, id);
+  writeFileSync(filePath, JSON.stringify(conversation, null, 2));
+  console.log(
+    `[store] Created conversation ${id} for project ${projectId}: ${conversation.name}`,
+  );
+
+  return {
+    id,
+    name: conversation.name,
+    messageCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// Delete a conversation
+export function deleteProjectConversation(
+  projectId: string,
+  conversationId: string,
+): void {
+  const filePath = getConversationFilePath(projectId, conversationId);
+  if (existsSync(filePath)) {
+    unlinkSync(filePath);
+    console.log(
+      `[store] Deleted conversation ${conversationId} for project ${projectId}`,
+    );
+  }
+}
+
+// Get conversation name
+export function getConversationName(
+  projectId: string,
+  conversationId: string,
+): string | null {
+  const filePath = getConversationFilePath(projectId, conversationId);
+  if (!existsSync(filePath)) return null;
+  try {
+    const data = JSON.parse(readFileSync(filePath, "utf8"));
+    return data.name || null;
+  } catch {
+    return null;
+  }
+}
+
+// Rename a conversation
+export function renameProjectConversation(
+  projectId: string,
+  conversationId: string,
+  name: string,
+): void {
+  const filePath = getConversationFilePath(projectId, conversationId);
+  if (!existsSync(filePath)) return;
+  try {
+    const data = JSON.parse(readFileSync(filePath, "utf8"));
+    data.name = name;
+    data.updatedAt = new Date().toISOString();
+    writeFileSync(filePath, JSON.stringify(data, null, 2));
+    console.log(
+      `[store] Renamed conversation ${conversationId} to "${name}"`,
+    );
+  } catch (err) {
+    console.error(`[store] Failed to rename conversation:`, err);
+  }
+}
+
+// Load conversation for a specific project (with conversationId support)
 export function loadProjectConversation(
   projectId: string,
+  conversationId?: string,
 ): ProjectConversation {
+  migrateProjectConversation(projectId);
+  const convId = conversationId || "default";
+
   try {
-    const convPath = join(getProjectConfigDir(projectId), "conversation.json");
+    const convPath = getConversationFilePath(projectId, convId);
     if (!existsSync(convPath)) {
       return {
         projectId,
+        conversationId: convId,
         messages: [],
         claudeSessionId: null,
         updatedAt: new Date().toISOString(),
       };
     }
     const data = JSON.parse(readFileSync(convPath, "utf8"));
-    // Ensure all fields exist
     return {
       projectId,
+      conversationId: convId,
       messages: data.messages || [],
       claudeSessionId: data.claudeSessionId || null,
       updatedAt: data.updatedAt || new Date().toISOString(),
     };
   } catch (err) {
     console.error(
-      `[store] Failed to load project conversation for ${projectId}:`,
+      `[store] Failed to load project conversation for ${projectId}/${convId}:`,
       err,
     );
     return {
       projectId,
+      conversationId: convId,
       messages: [],
       claudeSessionId: null,
       updatedAt: new Date().toISOString(),
@@ -513,56 +746,110 @@ export function saveProjectConversation(
 ): void {
   ensureProjectsDir();
   ensureProjectConfigDir(projectId);
+  ensureConversationsDir(projectId);
   conversation.updatedAt = new Date().toISOString();
-  const convPath = join(getProjectConfigDir(projectId), "conversation.json");
-  writeFileSync(convPath, JSON.stringify(conversation, null, 2));
+  const convId = conversation.conversationId || "default";
+  const convPath = getConversationFilePath(projectId, convId);
+
+  // Preserve name and createdAt from existing file
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(convPath)) {
+      existing = JSON.parse(readFileSync(convPath, "utf8"));
+    }
+  } catch {
+    // ignore
+  }
+
+  const toSave = {
+    ...existing,
+    conversationId: convId,
+    messages: conversation.messages,
+    claudeSessionId: conversation.claudeSessionId,
+    updatedAt: conversation.updatedAt,
+  };
+  writeFileSync(convPath, JSON.stringify(toSave, null, 2));
   console.log(
-    `[store] Project ${projectId} conversation saved, messages:`,
+    `[store] Project ${projectId}/${convId} conversation saved, messages:`,
     conversation.messages.length,
   );
 }
 
-// Add message to a specific project
+// Add message to a specific project conversation
 export function addProjectMessage(
   projectId: string,
   message: Message,
+  conversationId?: string,
 ): ProjectConversation {
-  const conversation = loadProjectConversation(projectId);
+  const conversation = loadProjectConversation(projectId, conversationId);
   conversation.messages.push(message);
   saveProjectConversation(projectId, conversation);
   return conversation;
 }
 
-// Get Claude session ID for a specific project
-export function getProjectSessionId(projectId: string): string | null {
-  const conversation = loadProjectConversation(projectId);
+// Get Claude session ID for a specific project conversation
+export function getProjectSessionId(
+  projectId: string,
+  conversationId?: string,
+): string | null {
+  const conversation = loadProjectConversation(projectId, conversationId);
   return conversation.claudeSessionId;
 }
 
-// Save Claude session ID for a specific project
+// Save Claude session ID for a specific project conversation
 export function saveProjectSessionId(
   projectId: string,
   sessionId: string,
+  conversationId?: string,
 ): void {
-  const conversation = loadProjectConversation(projectId);
+  const conversation = loadProjectConversation(projectId, conversationId);
   conversation.claudeSessionId = sessionId;
   saveProjectConversation(projectId, conversation);
-  console.log(`[store] Project ${projectId} session ID saved:`, sessionId);
+  console.log(
+    `[store] Project ${projectId}/${conversationId || "default"} session ID saved:`,
+    sessionId,
+  );
 }
 
 // Clear conversation for a specific project
-export function clearProjectConversation(projectId: string): void {
+export function clearProjectConversation(
+  projectId: string,
+  conversationId?: string,
+): void {
   ensureProjectsDir();
   ensureProjectConfigDir(projectId);
+  ensureConversationsDir(projectId);
+  const convId = conversationId || "default";
   const empty: ProjectConversation = {
     projectId,
+    conversationId: convId,
     messages: [],
     claudeSessionId: null,
     updatedAt: new Date().toISOString(),
   };
-  const convPath = join(getProjectConfigDir(projectId), "conversation.json");
-  writeFileSync(convPath, JSON.stringify(empty, null, 2));
-  console.log(`[store] Project ${projectId} conversation and session cleared`);
+  const convPath = getConversationFilePath(projectId, convId);
+
+  // Preserve name and createdAt
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(convPath)) {
+      existing = JSON.parse(readFileSync(convPath, "utf8"));
+    }
+  } catch {
+    // ignore
+  }
+
+  const toSave = {
+    ...existing,
+    conversationId: convId,
+    messages: [],
+    claudeSessionId: null,
+    updatedAt: empty.updatedAt,
+  };
+  writeFileSync(convPath, JSON.stringify(toSave, null, 2));
+  console.log(
+    `[store] Project ${projectId}/${convId} conversation and session cleared`,
+  );
 }
 
 // Get project by ID (validates it exists)
