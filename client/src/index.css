@@ -27,6 +27,7 @@
   --color-accent-muted: #c9644230;
 }
 
+html,
 body {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
@@ -34,6 +35,10 @@ body {
     "liga" 1,
     "calt" 1;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  overscroll-behavior: none;
+  width: 100%;
+  height: 100%;
 }
 
 ::-webkit-scrollbar {
@@ -59,6 +64,13 @@ body {
 .break-anywhere {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Hide iOS input accessory bar (up/down arrows + done/checkmark) */
+input::-webkit-contacts-auto-fill-button,
+input::-webkit-credentials-auto-fill-button {
+  display: none !important;
+  visibility: hidden !important;
 }
 
 /* Prism syntax highlighting - warm dark theme */

@@ -204,6 +204,10 @@ export default function AskUserQuestionCard({
                       if (e.key === "Enter" && canSubmit) handleSubmit();
                     }}
                     placeholder="Type your answer..."
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     className="w-full p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] text-sm placeholder:text-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-accent)]"
                   />
                 )}
@@ -226,6 +230,10 @@ export default function AskUserQuestionCard({
                   if (e.key === "Enter" && canSubmit) handleSubmit();
                 }}
                 placeholder="Type your answer..."
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 className="w-full p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] text-sm placeholder:text-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-accent)]"
               />
             )}

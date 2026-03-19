@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, memo } from "react";
+import { useState, useRef, useCallback, memo, useEffect } from "react";
 
 interface ChatInputProps {
   isStreaming: boolean;
@@ -33,6 +33,24 @@ export default memo(function ChatInput({
     [draftKey],
   );
 
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // On touch devices, intercept the tap and focus with preventScroll
+  // to stop the browser from scrolling the visual viewport (which causes
+  // the header to jump up for a frame before our JS corrects it).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (document.activeElement === el) return; // already focused
+      e.preventDefault();
+      el.focus({ preventScroll: true });
+    };
+    el.addEventListener("pointerdown", onPointerDown);
+    return () => el.removeEventListener("pointerdown", onPointerDown);
+  }, []);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isStreaming) return;
@@ -44,10 +62,16 @@ export default memo(function ChatInput({
   return (
     <form onSubmit={handleSubmit} className="flex gap-2 items-end">
       <input
+        ref={inputRef}
         type="text"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         placeholder={isStreaming ? "Task running..." : "New task..."}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        enterKeyHint="send"
         className="flex-1 min-h-[44px] px-4 py-3 bg-[var(--color-bg-secondary)] rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] text-base"
       />
       {isStreaming ? (
