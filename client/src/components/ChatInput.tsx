@@ -73,8 +73,11 @@ export default memo(function ChatInput({
     onSend(text);
   };
 
+  const isTouchDevice = "ontouchstart" in window;
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // On touch devices (no shift key), let Enter insert newlines — use send button instead
+    if (e.key === "Enter" && !e.shiftKey && !isTouchDevice) {
       e.preventDefault();
       handleSubmit(e);
     }
