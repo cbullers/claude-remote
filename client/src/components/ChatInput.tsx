@@ -33,7 +33,15 @@ export default memo(function ChatInput({
     [draftKey],
   );
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize textarea to fit content
+  const autoResize = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 150) + "px";
+  }, []);
 
   // On touch devices, intercept the tap and focus with preventScroll
   // to stop the browser from scrolling the visual viewport (which causes
@@ -56,23 +64,39 @@ export default memo(function ChatInput({
     if (!input.trim() || isStreaming) return;
     const text = input.trim();
     setInput("");
+    // Reset textarea height after clearing
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        inputRef.current.style.height = "auto";
+      }
+    });
     onSend(text);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
   };
 
   return (
     <form onSubmit={handleSubmit} className="flex gap-2 items-end">
-      <input
+      <textarea
         ref={inputRef}
-        type="text"
         value={input}
-        onChange={(e) => setInput(e.target.value)}
+        onChange={(e) => {
+          setInput(e.target.value);
+          autoResize();
+        }}
+        onKeyDown={handleKeyDown}
         placeholder={isStreaming ? "Task running..." : "New task..."}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
-        enterKeyHint="send"
-        className="flex-1 min-h-[44px] px-4 py-3 bg-[var(--color-bg-secondary)] rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] text-base"
+        rows={1}
+        className="flex-1 min-h-[44px] max-h-[150px] px-4 py-3 bg-[var(--color-bg-secondary)] rounded-2xl focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] text-base resize-none"
       />
       {isStreaming ? (
         <button
