@@ -77,6 +77,7 @@ interface PendingQuestionData {
 interface ProjectState {
   messages: Message[];
   isStreaming: boolean;
+  isLoadingHistory: boolean;
   currentThinking: string;
   currentResponse: string;
   currentActivity: ToolActivity[];
@@ -467,6 +468,7 @@ function createEmptyProjectState(): ProjectState {
   return {
     messages: [],
     isStreaming: false,
+    isLoadingHistory: false,
     currentThinking: "",
     currentResponse: "",
     currentActivity: [],
@@ -578,6 +580,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
     createEmptyProjectState();
   const messages = activeState.messages;
   const isStreaming = activeState.isStreaming;
+  const isLoadingHistory = activeState.isLoadingHistory;
   const currentThinking = activeState.currentThinking;
   const currentResponse = activeState.currentResponse;
   const currentActivity = activeState.currentActivity;
@@ -627,6 +630,10 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       console.log(
         `Fetching conversation history for project: ${projectId}, conv: ${convId}`,
       );
+      updateProjectState(sKey, (state) => ({
+        ...state,
+        isLoadingHistory: true,
+      }));
       for (let attempt = 1; attempt <= retries; attempt++) {
         try {
           const convPath = convId
@@ -667,6 +674,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           updateProjectState(sKey, (state) => ({
             ...state,
             messages: loadedMessages,
+            isLoadingHistory: false,
           }));
           if (loadedMessages.length > 0) {
             requestAnimationFrame(() => {
@@ -702,6 +710,10 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
         }
       }
       console.error("All retries failed for project conversation");
+      updateProjectState(sKey, (state) => ({
+        ...state,
+        isLoadingHistory: false,
+      }));
     },
     [serverFetch, updateProjectState],
   );
@@ -2193,6 +2205,14 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
               >
                 Open Project
               </button>
+            </div>
+          </div>
+        ) : isLoadingHistory && messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full">
+            <div className="flex gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-text-tertiary)] animate-bounce [animation-delay:-0.3s]" />
+              <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-text-tertiary)] animate-bounce [animation-delay:-0.15s]" />
+              <div className="w-2.5 h-2.5 rounded-full bg-[var(--color-text-tertiary)] animate-bounce" />
             </div>
           </div>
         ) : (
