@@ -30,6 +30,7 @@ import {
   isPushSupported,
   getPushPermission,
 } from "../lib/push-client";
+import { useWakeLock } from "../lib/wake-lock";
 
 interface Props {
   serverConfig: ServerConfig;
@@ -242,7 +243,7 @@ function ConversationSwitcher({
                           <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
                         </svg>
                       </button>
-                      {conv.id !== "default" && !isActive && (
+                      {conv.id !== "default" && !isConvStreaming && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -584,6 +585,9 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
   const taskStartTime = activeState.taskStartTime;
   const statusMessage = activeState.statusMessage;
   const lastEventTime = activeState.lastEventTime;
+
+  // Keep screen awake while Claude is responding
+  useWakeLock(isStreaming);
 
   const openProjectIds = useMemo(
     () => new Set(openProjects.map((p) => p.id)),
