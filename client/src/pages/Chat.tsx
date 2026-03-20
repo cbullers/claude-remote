@@ -614,7 +614,9 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       if (distanceFromBottom > 150) return;
     }
-    messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current.scrollIntoView({
+      behavior: force ? "instant" : "smooth",
+    });
   }, []);
 
   // Fetch conversation history for a specific project/conversation
@@ -669,7 +671,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           if (loadedMessages.length > 0) {
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+                messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
               });
             });
           }
