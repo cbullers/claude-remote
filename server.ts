@@ -1934,7 +1934,7 @@ async function main() {
                 lastToolName = null;
               }
               currentChunkText += event.text;
-              assistantText += event.text;
+              assistantText += (assistantText && !assistantText.endsWith("\n") ? "\n\n" : "") + event.text;
               savePartialResponse(
                 jKey,
                 assistantText,

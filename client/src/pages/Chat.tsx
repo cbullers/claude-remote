@@ -1255,7 +1255,7 @@ export default function Chat({ serverConfig, onNavigate }: Props) {
           }));
         } else if (msg.type === "text" && eventKey) {
           const currentResponse = responseRefs.current.get(eventKey) || "";
-          const delimiter = currentResponse ? "\n" : "";
+          const delimiter = currentResponse && !currentResponse.endsWith("\n") ? "\n\n" : "";
           responseRefs.current.set(
             eventKey,
             currentResponse + delimiter + (msg.text || ""),
